@@ -598,6 +598,8 @@ def _render_panel_v2(data: dict, bench_data: dict | None = None) -> str:
 
     if bench_data:
         lines.extend(_render_benchmark_compare(bench_data, r, cp, liupai_name or ""))
+    lines.append("")
+    lines.append("⭐ 提示:数据来自《燕云十六声》官方接口,详细数据可能与游戏内实际略有差距。")
     return "\n".join(lines)
 
 

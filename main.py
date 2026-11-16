@@ -49,7 +49,7 @@ HELP_TEXT = """【燕云十六声查询】指令列表
 ⚠ 调用的是网易非公开接口,token 年度有效,仅供学习交流。"""
 
 
-@register("astrbot_plugin_yanyun_query", "林迟羽", "燕云十六声角色查询(角色档案/探索度/流派配置/面板属性)", "v1.0.0")
+@register("astrbot_plugin_yanyun_query", "林迟羽", "燕云十六声角色查询(角色档案/探索度/流派配置/面板属性)", "v1.0.1")
 class YanyunQueryPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -344,9 +344,20 @@ class YanyunQueryPlugin(Star):
         rid = identity.strip()
         await self.store.set(user_id, rid)
 
-        if self.client._pool.by_role(rid) is not None:
-            yield event.plain_result(f"绑定成功!以后「燕云我的」查询的是:{rid}")
-            return
+        cred = self.client._pool.by_role(rid)
+        if cred is not None:
+            yield event.plain_result(f"角色 {rid} 已有凭据,正在校验是否有效…")
+            ok, reason = await self.client.verify_credential(rid)
+            if ok:
+                yield event.plain_result(f"绑定成功!凭据有效,以后「燕云我的」查询的是:{rid}")
+                return
+            if reason != "invalid":
+                yield event.plain_result(
+                    f"已记录绑定:{rid}\n凭据校验异常({reason}),已按有效处理;"
+                    "若查询报错请发「燕云扫码」重新登录。"
+                )
+                return
+            yield event.plain_result("原凭据已失效,正在为你发起扫码登录…")
 
         pool_ids = [c.role_id for c in self.client._pool._creds if c.enabled]
 
@@ -367,7 +378,7 @@ class YanyunQueryPlugin(Star):
                     qr_path.write_bytes(base64.b64decode(st["qr_b64"]))
                     yield event.chain_result([
                         Comp.Plain(
-                            f"已记录绑定:{rid}\n该角色还没有凭据,现在为你发起扫码登录:\n"
+                            f"已记录绑定:{rid}\n现在为你发起扫码登录:\n"
                             "请用手机「大神 App」→ 首页右上角扫一扫(约2分钟有效),\n"
                             "成功后会自动签发 token 并完成绑定。"
                         ),
