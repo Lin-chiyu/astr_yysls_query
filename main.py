@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +50,7 @@ HELP_TEXT = """【燕云十六声查询】指令列表
 ⚠ 调用的是网易非公开接口,token 年度有效,仅供学习交流。"""
 
 
-@register("astrbot_plugin_yanyun_query", "林迟羽", "燕云十六声角色查询(角色档案/探索度/流派配置/面板属性)", "v1.0.1")
+@register("astrbot_plugin_yanyun_query", "林迟羽", "燕云十六声角色查询(角色档案/探索度/流派配置/面板属性)", "v1.0.2")
 class YanyunQueryPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -311,9 +312,6 @@ class YanyunQueryPlugin(Star):
 
     @filter.command("燕云绑定", alias={"yy绑定"})
     async def yy_bind(self, event: AstrMessageEvent, identity: str = ""):
-        user_id = event.get_sender_id()
-        is_group = bool(event.get_group_id())
-
         if not identity:
             yield event.plain_result(
                 "请回复你的燕云角色编号(60秒内有效,游戏内个人信息页可查):"
@@ -342,6 +340,27 @@ class YanyunQueryPlugin(Star):
                 return
 
         rid = identity.strip()
+        async for r in self._do_bind(event, rid):
+            yield r
+
+    @filter.regex(r"^(?:燕云绑定|yy绑定)(?![ \t])[^\d]*\d")
+    async def yy_bind_loose(self, event: AstrMessageEvent):
+        """兜底:兼容「燕云绑定0455681870」「燕云绑定<0455681870>」等无空格写法。
+
+        规则:命令名之后,取第一个数字到最后一个数字之间的全部数字作为角色编号。
+        """
+        text = event.get_message_str().strip()
+        digits = "".join(re.findall(r"\d", text))
+        if not digits:
+            return
+        logger.info(f"[燕云查询] 兜底匹配绑定指令:{text!r} -> 角色 {digits}")
+        async for r in self._do_bind(event, digits):
+            yield r
+
+    async def _do_bind(self, event: AstrMessageEvent, rid: str):
+        """绑定 + 凭据校验 + 必要时扫码(yy_bind / yy_bind_loose 共用)。"""
+        user_id = event.get_sender_id()
+        is_group = bool(event.get_group_id())
         await self.store.set(user_id, rid)
 
         cred = self.client._pool.by_role(rid)
