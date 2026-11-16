@@ -1,7 +1,7 @@
 name: astrbot_plugin_yanyun_query
 display_name: 燕云十六声查询
 desc: |
-  查询《燕云十六声》角色档案:等级 / 门派 / 修为 / 成就 / 外观收集 / **探索度** / 区域收集(宝箱·蹊跷) / 流派配置(套装·功法·心法·装备·奇术) / 面板属性。
+  查询《燕云十六声》角色档案:等级 / 门派 / 功力 / 成就 / 外观收集 / **探索度** / 区域收集(宝箱·蹊跷) / 流派配置(套装·功法·心法·装备·奇术) / 面板属性。
 
   数据来自网易大神 datamsapi 生涯接口(协议已实测)。
 
@@ -27,7 +27,7 @@ desc: |
 
   ⚠ 调用网易非公开接口,随时可能失效,仅供学习交流。
 short_desc: 查询燕云十六声角色档案,支持面板一键扫码获取凭据
-version: v2.2.0
+version: v1.0.0
 author: 林迟羽
 repo: https://github.com/Lin-chiyu/astr_yysls_query
 astrbot_version: ">=4.27.5,<5"

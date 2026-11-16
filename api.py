@@ -279,7 +279,7 @@ class DashenClient:
         return await self.post_with_cookies(url, {}, cred)
 
     async def query_proxy_role(self, role_id: str) -> dict[str, Any]:
-        """角色全量档案(昵称/等级/门派/成就/修为/外观等,数据最全)。"""
+        """角色全量档案(昵称/等级/门派/成就/功力/外观等,数据最全)。"""
         cred = self._pool.by_role(role_id)
         if cred is None:
             raise DashenAPIError(
