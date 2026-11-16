@@ -105,7 +105,7 @@ def render_proxy_role(resp: dict[str, Any], title: str, info_data: dict | None =
     pairs = [
         ("base.level", "等级"),
         ("base.number_id", "角色编号"),
-        ("base.max_xiuwei_kungfu", "最高修为"),
+        ("base.max_xiuwei_kungfu", "最高功力"),
         ("fashion.score", "时装收集分"),
     ]
     for key, label in pairs:
@@ -173,7 +173,7 @@ def _render_attrs(data: dict, as_blocks: bool = False) -> list[str] | str:
         if isinstance(k, str) and k.startswith("real_attr."):
             sub = k.split(".", 1)[1]
             if sub == "XIUWEI_KUNGFU":
-                continue  # 修为已在档案区单独展示
+                continue  # 功力已在档案区单独展示
             try:
                 fv = float(v)
                 v = int(fv) if fv.is_integer() else round(fv, 1)

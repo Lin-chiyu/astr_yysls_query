@@ -49,7 +49,7 @@ HELP_TEXT = """【燕云十六声查询】指令列表
 ⚠ 调用的是网易非公开接口,token 年度有效,仅供学习交流。"""
 
 
-@register("astrbot_plugin_yanyun_query", "林迟羽", "燕云十六声角色查询(角色档案/探索度/流派配置/面板属性)", "v2.2.0")
+@register("astrbot_plugin_yanyun_query", "林迟羽", "燕云十六声角色查询(角色档案/探索度/流派配置/面板属性)", "v1.0.0")
 class YanyunQueryPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -171,7 +171,7 @@ class YanyunQueryPlugin(Star):
 
     @filter.llm_tool(name="yanyun_query_profile")
     async def yanyun_query_profile(self, event: AstrMessageEvent, role_id: str = "") -> str:
-        """查询燕云十六声游戏角色的完整档案,包括等级、门派、修为、成就、外观收集、各区域探索度、区域收集(宝箱/蹊跷数量)、流派配置(套装、功法、心法、装备、奇术)。当用户想查看燕云十六声的角色数据、角色信息、探索度、流派、装备、心法等内容时调用此工具。
+        """查询燕云十六声游戏角色的完整档案,包括等级、门派、功力、成就、外观收集、各区域探索度、区域收集(宝箱/蹊跷数量)、流派配置(套装、功法、心法、装备、奇术)。当用户想查看燕云十六声的角色数据、角色信息、探索度、流派、装备、心法等内容时调用此工具。
         Args:
             role_id(string): 要查询的燕云角色编号(纯数字)。如果用户没有明确指定角色编号,请传空字符串,将自动查询该用户绑定的角色
         """
