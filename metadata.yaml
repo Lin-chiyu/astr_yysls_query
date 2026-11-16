@@ -22,7 +22,7 @@ desc: |
 short_desc: 查询燕云十六声角色档案,支持面板一键扫码获取凭据
 version: v2.1.0
 author: xiaoyu
-repo: https://github.com/your-name/astrbot_plugin_yanyun_query
+repo: https://github.com/Lin-chiyu/astr_yysls_query
 astrbot_version: ">=4.27.5,<5"
 tags:
   - 游戏查询
