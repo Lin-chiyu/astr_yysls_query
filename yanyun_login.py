@@ -1,0 +1,292 @@
+"""扫码登录服务:Playwright 拿登录 cookie → 纯 HTTP 签发年度 token。
+
+全流程已实测打通(2026-11-17):
+  1. headless 浏览器打开 ds.163.com(裸域,www 子域无 DNS 记录)
+  2. 点"登录" → URS 弹窗(dl.reg.163.com/webzj)里的二维码是 JS 动态渲染、无 src,
+     因此用全页截图 + 固定坐标裁剪(viewport 固定 1440x900,坐标稳定)
+  3. 轮询 cookie,GL-XSRF-TOKEN + GOD_UUID 出现即登录成功
+  4. 全量 cookie + sha1(body+XSRF) 纯 HTTP 调 getReportToken(实测可用,
+     无需 window.sig/WASM;同角色同年服务器返回同一 token)
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import hashlib
+import io
+import json
+import time
+import uuid
+from typing import Any, Callable
+
+import aiohttp
+from astrbot.api import logger
+
+try:
+    from playwright.async_api import async_playwright
+
+    PLAYWRIGHT_OK = True
+except ImportError:  # 部署机未装 playwright 时插件其余功能不受影响
+    PLAYWRIGHT_OK = False
+
+try:
+    from PIL import Image
+
+    PIL_OK = True
+except ImportError:
+    PIL_OK = False
+
+HOME_URL = "https://ds.163.com/"
+# viewport 固定 1440x900,登录弹窗二维码在页面上的稳定裁剪区域(x1,y1,x2,y2)
+QR_CROP_BOX = (390, 300, 640, 560)
+SCAN_TIMEOUT_SECONDS = 180
+ISSUE_URL = "https://inf.ds.163.com/v1/web/game/report/getReportToken"
+
+
+def qr_png_to_ascii(png_bytes: bytes, width: int = 56) -> str:
+    """二维码 PNG → 半块字符点阵(用于日志面板显示兜底)。"""
+    if not PIL_OK:
+        return "(未安装 Pillow,无法生成点阵)"
+    img = Image.open(io.BytesIO(png_bytes)).convert("L")
+    h = max(1, int(img.height * width / img.width / 2))
+    small = img.resize((width, h * 2))
+    px = small.load()
+    lines = []
+    for y in range(0, h * 2, 2):
+        row = ""
+        for x in range(width):
+            top = px[x, y] < 140
+            bottom = px[x, y + 1] < 140
+            row += "█" if (top and bottom) else "▀" if top else "▄" if bottom else " "
+        lines.append(row)
+    return "\n".join(lines)
+
+
+class LoginService:
+    """扫码登录 + token 签发状态机(单任务)。"""
+
+    def __init__(self, server: str = "1", on_success: Callable[[dict, list[dict]], Any] | None = None):
+        self._server = server or "1"
+        self._on_success = on_success  # 回调签名:(result, cookies)
+        self._state = "idle"
+        self._message = "待机"
+        self._qr_b64 = ""
+        self._result: dict | None = None
+        self._saved = False
+        self._task: asyncio.Task | None = None
+        self._browser_lock = asyncio.Lock()
+        self._pw = None
+        self._browser = None
+
+    # ------------------------------------------------------------------ 对外
+
+    def status(self) -> dict:
+        return {
+            "state": self._state,
+            "message": self._message,
+            "qr_b64": self._qr_b64,
+            "result": self._result,
+            "saved": self._saved,
+        }
+
+    async def start(self, role_id: str) -> dict:
+        if not PLAYWRIGHT_OK:
+            return {"started": False, "message": "未安装 playwright,请先 pip install playwright && playwright install chromium"}
+        if self._task and not self._task.done():
+            return {"started": False, "message": "已有登录任务进行中,请先取消或等待完成"}
+        if not role_id:
+            return {"started": False, "message": "缺少 role_id"}
+        self._reset(role_id)
+        self._task = asyncio.create_task(self._run(role_id))
+        return {"started": True, "message": "已启动"}
+
+    async def cancel(self) -> dict:
+        if self._task and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._state, self._message = "idle", "已取消"
+            return {"cancelled": True}
+        return {"cancelled": False, "message": "没有进行中的任务"}
+
+    async def close(self):
+        if self._task and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                pass
+        try:
+            if self._browser:
+                await self._browser.close()
+            if self._pw:
+                await self._pw.stop()
+        except Exception as e:
+            logger.warning(f"[燕云查询] 浏览器清理异常: {e}")
+        finally:
+            self._browser = None
+            self._pw = None
+
+    # ------------------------------------------------------------------ 内部
+
+    def _reset(self, role_id: str):
+        self._state, self._message = "starting", f"正在打开登录页(角色 {role_id})..."
+        self._qr_b64 = ""
+        self._result = None
+        self._saved = False
+
+    async def _ensure_browser(self):
+        async with self._browser_lock:
+            if self._browser and self._browser.is_connected():
+                return self._browser
+            self._pw = await async_playwright().start()
+            last_err: Exception | None = None
+            for kwargs in ({}, {"channel": "chrome"}, {"channel": "msedge"}):
+                try:
+                    self._browser = await self._pw.chromium.launch(headless=True, **kwargs)
+                    logger.info(f"[燕云查询] 浏览器启动成功: {kwargs or 'chromium(默认)'}")
+                    return self._browser
+                except Exception as e:
+                    last_err = e
+            raise RuntimeError(
+                f"浏览器启动失败({last_err});Linux 服务器请先执行 playwright install chromium"
+            )
+
+    async def _run(self, role_id: str):
+        context = None
+        try:
+            browser = await self._ensure_browser()
+            context = await browser.new_context(
+                viewport={"width": 1440, "height": 900},
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+                ),
+            )
+            page = await context.new_page()
+
+            self._message = "正在打开大神网页版..."
+            await page.goto(HOME_URL, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(3000)
+
+            # 点登录入口(启发式)
+            clicked = False
+            for sel in ("text=登录", "a:has-text('登录')", "button:has-text('登录')"):
+                try:
+                    loc = page.locator(sel).first
+                    await loc.wait_for(state="visible", timeout=4000)
+                    await loc.click()
+                    clicked = True
+                    break
+                except Exception:
+                    continue
+            if not clicked:
+                raise RuntimeError("未找到登录入口,可能页面改版,请使用 README 手动方式")
+            await page.wait_for_timeout(3000)
+
+            # 全页截图 → 裁剪二维码 → base64 + 点阵日志
+            self._state, self._message = "waiting", "二维码已就绪,请用手机大神 App 扫码登录"
+            shot = await page.screenshot(full_page=False)
+            qr_png = await self._crop_qr(shot)
+            self._qr_b64 = base64.b64encode(qr_png).decode("ascii")
+            try:
+                logger.info(
+                    "[燕云查询] 登录二维码点阵(也可在面板查看图片):\n" + qr_png_to_ascii(qr_png)
+                )
+            except Exception:
+                pass
+
+            # 轮询登录 cookie
+            deadline = time.monotonic() + SCAN_TIMEOUT_SECONDS
+            cookies = None
+            while time.monotonic() < deadline:
+                await asyncio.sleep(3)
+                jar = {c["name"]: c["value"] for c in await context.cookies(HOME_URL)}
+                if jar.get("GL-XSRF-TOKEN") and jar.get("GOD_UUID"):
+                    cookies = await context.cookies(HOME_URL)
+                    break
+            if not cookies:
+                self._state, self._message = "timeout", "扫码超时,请重新获取"
+                return
+            logger.info(f"[燕云查询] 登录成功,共 {len(cookies)} 条 cookie,开始签发 token ...")
+            await context.close()
+            context = None
+
+            # 纯 HTTP 签发
+            self._state, self._message = "issuing", "登录成功,正在签发 token ..."
+            result = await self._issue_token(cookies, role_id)
+            self._result = result
+            if self._on_success:
+                try:
+                    await self._on_success(result, cookies)
+                    self._saved = True
+                    self._message = f"token 已写入插件配置(角色 {result['role_id']}),登录 cookie 已保存"
+                except Exception as e:
+                    self._message = f"token 签发成功但写入配置失败: {e};请手动填入 token={result['token']}"
+                self._state = "done"
+            else:
+                self._saved = False
+                self._message = f"token 签发成功: {result['token']}"
+                self._state = "done"
+            logger.info(f"[燕云查询] 签发完成: {self._message}")
+        except asyncio.CancelledError:
+            self._state, self._message = "idle", "已取消"
+            raise
+        except Exception as e:
+            logger.error(f"[燕云查询] 登录流程失败: {e}")
+            self._state, self._message = "failed", f"{type(e).__name__}: {e}"
+        finally:
+            if context:
+                try:
+                    await context.close()
+                except Exception:
+                    pass
+
+    async def _crop_qr(self, shot: bytes) -> bytes:
+        if not PIL_OK:
+            return shot
+        img = Image.open(io.BytesIO(shot))
+        crop = img.crop(QR_CROP_BOX)
+        crop = crop.resize((crop.width * 3, crop.height * 3), Image.LANCZOS)
+        buf = io.BytesIO()
+        crop.save(buf, format="PNG")
+        return buf.getvalue()
+
+    async def _issue_token(self, cookies: list[dict], role_id: str) -> dict:
+        jar = {c["name"]: c["value"] for c in cookies}
+        xsrf = jar["GL-XSRF-TOKEN"]
+        uid = jar["GOD_UUID"]
+        body = {"appKey": "h72", "roleId": role_id, "server": self._server, "source": 1, "type": "yearly"}
+        body_str = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+        sign = hashlib.sha1((body_str + xsrf).encode("utf-8")).hexdigest()
+        headers = {
+            "Accept": "application/json, text/plain, */*",
+            "Content-Type": "application/json;charset=UTF-8",
+            "GL-ClientType": "61",
+            "GL-CheckSum": sign,
+            "GL-Nonce": str(int(time.time() * 1000)),
+            "GL-X-XSRF-TOKEN": xsrf,
+            "GL-Uid": uid,
+            "GL-DeviceId": str(uuid.uuid4()).split("-")[0],
+            "Cookie": "; ".join(f"{k}={v}" for k, v in jar.items()),
+            "Origin": "https://ds.163.com",
+            "Referer": "https://ds.163.com/",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 app/df_client dfVersion/100111"
+            ),
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(ISSUE_URL, data=body_str.encode("utf-8"), headers=headers) as resp:
+                data = await resp.json(content_type=None)
+        if data.get("code") != 200:
+            raise RuntimeError(f"签发失败: {data.get('errmsg') or data}")
+        r = data["result"]
+        return {
+            "role_id": str(r.get("roleId") or role_id),
+            "token": r["token"],
+            "dts": str(r.get("day") or time.strftime("%Y")),
+        }

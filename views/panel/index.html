@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>燕云凭据获取</title>
+<style>
+  body { font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+         margin: 0; padding: 16px; background: #f5f6f8; color: #333; }
+  .card { background: #fff; border-radius: 12px; padding: 20px; max-width: 640px;
+          box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+  h2 { margin: 0 0 6px; font-size: 18px; }
+  .desc { color: #888; font-size: 13px; margin-bottom: 14px; line-height: 1.6; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  input { flex: 1; min-width: 220px; padding: 9px 12px; border: 1px solid #dcdfe6;
+          border-radius: 8px; font-size: 14px; outline: none; }
+  input:focus { border-color: #e34d4d; }
+  button { padding: 9px 18px; border: none; border-radius: 8px; font-size: 14px;
+           cursor: pointer; background: #e34d4d; color: #fff; }
+  button.secondary { background: #909399; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .state { margin: 14px 0 4px; padding: 10px 12px; background: #f4f4f5;
+           border-radius: 8px; font-size: 14px; white-space: pre-wrap; word-break: break-all; }
+  .qr-wrap { text-align: center; margin-top: 12px; }
+  .qr-wrap img { width: 280px; border: 1px solid #eee; border-radius: 8px; background: #fff; }
+  .tip { color: #999; font-size: 12px; margin-top: 8px; line-height: 1.6; }
+  .result { margin-top: 12px; padding: 12px; background: #f0f9eb; border-radius: 8px;
+            font-size: 13px; line-height: 1.8; word-break: break-all; }
+  .result .ok { color: #67c23a; font-weight: 600; }
+  .err { color: #f56c6c; font-size: 13px; margin-top: 10px; white-space: pre-wrap; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h2>燕云十六声 · 一键获取凭据</h2>
+    <div class="desc">
+      点击按钮后机器人会自动打开大神网页版并截取登录二维码,用<b>手机大神 App</b> 扫码登录,
+      登录成功后自动签发年度 token 并写入插件配置。token 与角色绑定,如需查询多个角色,
+      请分别用对应账号的大神扫码获取。
+    </div>
+    <div class="row">
+      <input id="role-id" placeholder="燕云角色编号,如 0488796812">
+      <button id="btn-start">一键获取 token</button>
+      <button id="btn-cancel" class="secondary">取消</button>
+    </div>
+    <div id="state" class="state">待机</div>
+    <div id="qr-wrap" class="qr-wrap hidden">
+      <img id="qr" alt="登录二维码">
+      <div class="tip">请用手机「大神 App」→ 首页右上角扫一扫,扫码登录<br>
+      二维码约 2 分钟有效,过期请点「取消」后重新获取</div>
+    </div>
+    <div id="result" class="result hidden">
+      <div class="ok">✓ 凭据获取成功</div>
+      <div>role_id: <span id="r-role"></span></div>
+      <div>token: <span id="r-token"></span></div>
+      <div>dts: <span id="r-dts"></span></div>
+      <div id="r-saved"></div>
+    </div>
+    <div id="err" class="err"></div>
+  </div>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

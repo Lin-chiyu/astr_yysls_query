@@ -1,0 +1,32 @@
+{
+  "dashen_accounts": {
+    "description": "凭据池(每项 = 一个可查询的燕云角色)。role_id/token/dts 三项全部由 tools/get_token.js 一次性产出,获取方式见 README.md。token 年度有效(dts=2026 表示 2026 年度),跨年或失效后重跑脚本即可。⚠ token 是访问角色生涯数据的凭据,请勿外传。",
+    "hint": "[{\"name\": \"我的账号\", \"role_id\": \"0488796812\", \"token\": \"粘贴getReportToken返回的token\", \"dts\": \"2026\", \"enabled\": true}]",
+    "obvious_hint": true,
+    "type": "list",
+    "default": [
+      {
+        "name": "账号1",
+        "role_id": "",
+        "token": "",
+        "dts": "2026",
+        "enabled": false
+      }
+    ]
+  },
+  "server": {
+    "description": "区服标识,请求 body 里的 server 字段,默认 1(正式服)。一般不用改。",
+    "type": "string",
+    "default": "1"
+  },
+  "timeout": {
+    "description": "接口请求超时(秒)。",
+    "type": "int",
+    "default": 15
+  },
+  "cooldown_seconds": {
+    "description": "凭据 token 失效(401)后的冷却秒数,冷却期内不再使用该凭据。默认 3600(1小时)。",
+    "type": "int",
+    "default": 3600
+  }
+}

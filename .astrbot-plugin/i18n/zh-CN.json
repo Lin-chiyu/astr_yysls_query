@@ -1,0 +1,8 @@
+{
+  "views": {
+    "panel": {
+      "title": "燕云凭据获取",
+      "description": "扫码登录大神网页版,一键签发并写入年度 token"
+    }
+  }
+}
