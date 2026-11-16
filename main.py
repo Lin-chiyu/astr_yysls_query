@@ -21,7 +21,7 @@ from astrbot.core.utils.session_waiter import SessionController, session_waiter
 from .api import DashenAPIError, DashenClient, TokenInvalidError
 from .render import _render_attrs, render_generic, render_pvp, render_proxy_role, render_role_info
 from .storage import BindingStore
-from .yanyun_login import PLAYWRIGHT_OK, LoginService
+from .yanyun_login import LoginService, ensure_browser_ready
 
 try:  # AstrBot >= 4.27 提供的 web 辅助层
     from astrbot.api.web import error_response, json_response, request
@@ -49,7 +49,7 @@ HELP_TEXT = """【燕云十六声查询】指令列表
 ⚠ 调用的是网易非公开接口,token 年度有效,仅供学习交流。"""
 
 
-@register("astrbot_plugin_yanyun_query", "林迟羽", "燕云十六声角色查询(角色档案/探索度/流派配置/面板属性)", "v2.1.1")
+@register("astrbot_plugin_yanyun_query", "林迟羽", "燕云十六声角色查询(角色档案/探索度/流派配置/面板属性)", "v2.2.0")
 class YanyunQueryPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -59,6 +59,8 @@ class YanyunQueryPlugin(Star):
         self.login_svc = LoginService(
             server=config.get("server") or "1",
             on_success=self._on_token_issued,
+            mirror=str(config.get("browser_download_mirror") or ""),
+            auto_install=bool(config.get("auto_install_browser", True)),
         )
 
     def _build_client(self):
@@ -101,7 +103,14 @@ class YanyunQueryPlugin(Star):
         """注册 WebUI 面板后端 API(需要 AstrBot >= 4.27.5)。"""
         if not WEB_API_OK:
             logger.warning("[燕云查询] 当前 AstrBot 版本缺少 astrbot.api.web,面板功能不可用,请升级到 4.27.5+")
-            return
+        else:
+            await self._register_web_apis()
+
+        # 首次安装自愈:后台预装浏览器,避免用户首次扫码干等
+        if self.config.get("preinstall_browser", True):
+            asyncio.create_task(self._prewarm_browser())
+
+    async def _register_web_apis(self):
         try:
             self.context.register_web_api(
                 f"/{PLUGIN_NAME}/login/start", self._api_login_start, ["POST"], "开始扫码登录并签发 token"
@@ -115,6 +124,20 @@ class YanyunQueryPlugin(Star):
             logger.info("[燕云查询] 面板 API 已注册")
         except Exception as e:
             logger.warning(f"[燕云查询] 注册面板 API 失败(功能不可用): {e}")
+
+    async def _prewarm_browser(self):
+        """后台检查/安装无头浏览器(失败只记日志,不影响查询功能)。"""
+        try:
+            ok, msg, _ = await ensure_browser_ready(
+                mirror=str(self.config.get("browser_download_mirror") or ""),
+                auto_install=bool(self.config.get("auto_install_browser", True)),
+            )
+            if ok:
+                logger.info(f"[燕云查询] 浏览器环境就绪:{msg}")
+            else:
+                logger.warning(f"[燕云查询] 浏览器环境未就绪(扫码/面板功能不可用):{msg}")
+        except Exception as e:
+            logger.warning(f"[燕云查询] 浏览器预装检查异常:{e}")
 
     async def terminate(self):
         await self.login_svc.close()
@@ -156,7 +179,8 @@ class YanyunQueryPlugin(Star):
         if err:
             return err
         blocks = await self._fetch_blocks(role_id, "proxy", f"燕云角色档案 · {role_id}")
-        return "\n\n".join(blocks)
+        await self._deliver_to_user(event, blocks)
+        return "\n".join(blocks)[:600]
 
     @filter.llm_tool(name="yanyun_query_detail")
     async def yanyun_query_detail(self, event: AstrMessageEvent, role_id: str = "") -> str:
@@ -168,13 +192,16 @@ class YanyunQueryPlugin(Star):
         if err:
             return err
         try:
-            resp_info = await self.client.query_role_info(role_id)
-            text = render_role_info(resp_info, f"燕云家园与日常 · {role_id}")
-            resp_proxy = await self.client.query_proxy_role(role_id)
+            resp_info, resp_proxy = await asyncio.gather(
+                self.client.query_role_info(role_id),
+                self.client.query_proxy_role(role_id),
+            )
+            blocks = render_role_info(resp_info, f"燕云家园与日常 · {role_id}", as_blocks=True)
             attrs = _render_attrs(resp_proxy.get("data") or {}, as_blocks=True)
             if attrs:
-                text += "\n\n―― 属性一览 ――\n" + "\n".join(attrs)
-            return text
+                blocks.append("\n".join(attrs))
+            await self._deliver_to_user(event, blocks)
+            return "\n\n".join(blocks)[:600]
         except DashenAPIError as e:
             return f"[燕云查询] {e}"
         except Exception as e:
@@ -191,7 +218,8 @@ class YanyunQueryPlugin(Star):
         if err:
             return err
         blocks = await self._fetch_blocks(role_id, "pvp", f"燕云PVP · {role_id}")
-        return "\n\n".join(blocks)
+        await self._deliver_to_user(event, blocks)
+        return "\n".join(blocks)[:600]
 
     @filter.llm_tool(name="yanyun_analyze_build")
     async def yanyun_analyze_build(self, event: AstrMessageEvent, role_id: str = "") -> str:
@@ -214,7 +242,9 @@ class YanyunQueryPlugin(Star):
         except Exception as e:
             logger.error(f"[燕云查询] 内部错误: {e}")
             return f"[燕云查询] 内部错误:{type(e).__name__}"
-        return _render_panel_v2(panel.get("result") or {}, bench)
+        text = _render_panel_v2(panel.get("result") or {}, bench)
+        await self._deliver_to_user(event, [b for b in text.split("\n\n") if b.strip()])
+        return text[:600]
 
     @filter.command("燕云面板", alias={"yy面板"})
     async def yy_panel(self, event: AstrMessageEvent, identity: str = ""):
@@ -320,7 +350,7 @@ class YanyunQueryPlugin(Star):
 
         pool_ids = [c.role_id for c in self.client._pool._creds if c.enabled]
 
-        if not is_group and PLAYWRIGHT_OK:
+        if not is_group:
             # 私聊场景:自动为该角色发起扫码登录
             started = await self.login_svc.start(rid)
             if not started.get("started"):
@@ -330,7 +360,7 @@ class YanyunQueryPlugin(Star):
                 )
                 return
             qr_path = Path(StarTools.get_data_dir(PLUGIN_NAME)) / "login_qr_tmp.png"
-            for _ in range(8):
+            for _ in range(100):
                 await asyncio.sleep(1.5)
                 st = self.login_svc.status()
                 if st["qr_b64"]:
@@ -348,7 +378,10 @@ class YanyunQueryPlugin(Star):
                     yield event.plain_result(f"扫码流程失败:{st['message']}")
                     return
             else:
-                yield event.plain_result("二维码生成超时,重新发「燕云绑定 <角色编号>」再来")
+                st = self.login_svc.status()
+                yield event.plain_result(
+                    f"二维码生成超时({st.get('message', '')}),请稍后重新发「燕云绑定 <角色编号>」"
+                )
                 return
             asyncio.create_task(self._scan_notify(event.unified_msg_origin, user_id))
         else:
@@ -404,6 +437,29 @@ class YanyunQueryPlugin(Star):
             logger.warning(f"[燕云查询] 转发卡片发送失败,回退纯文本: {e}")
         for b in blocks:
             yield event.plain_result(b)
+
+    async def _deliver_to_user(self, event: AstrMessageEvent, blocks: list[str]):
+        """把完整内容主动发给用户:QQ 平台多块发合并转发卡片,单块发普通消息。
+
+        非 QQ 平台不发(LLM 回复会自然送达,避免重复);失败只记日志,不影响 LLM。
+        """
+        blocks = [b for b in blocks if b and b.strip()]
+        if not blocks:
+            return
+        try:
+            if event.get_platform_name() != "aiocqhttp":
+                return
+            self_id = str(getattr(event.message_obj, "self_id", "10000") or "10000")
+            if len(blocks) > 1:
+                nodes = [
+                    Comp.Node(content=[Comp.Plain(b)], name="燕云查询", uin=self_id)
+                    for b in blocks
+                ]
+                await event.send(event.chain_result([Comp.Nodes(nodes=nodes)]))
+            else:
+                await event.send(event.chain_result([Comp.Plain(blocks[0])]))
+        except Exception as e:
+            logger.warning(f"[燕云查询] 主动发送卡片失败(不影响 LLM): {e}")
 
     async def _fetch_blocks(self, role_id: str, kind: str, title: str) -> list[str]:
         try:
@@ -513,12 +569,6 @@ class YanyunQueryPlugin(Star):
         if event.get_group_id():
             yield event.plain_result("扫码登录涉及个人账号,请私聊我使用「燕云扫码」")
             return
-        if not PLAYWRIGHT_OK:
-            yield event.plain_result(
-                "机器人未安装 playwright(面板依赖),请联系管理员:\n"
-                "pip install playwright && playwright install chromium"
-            )
-            return
 
         yield event.plain_result("请回复你的燕云角色编号(60秒内,游戏内个人信息页可查):")
 
@@ -554,7 +604,7 @@ class YanyunQueryPlugin(Star):
 
         # 等二维码就绪后以图片发出
         qr_path = Path(StarTools.get_data_dir(PLUGIN_NAME)) / "login_qr_tmp.png"
-        for _ in range(8):
+        for _ in range(100):
             await asyncio.sleep(1.5)
             st = self.login_svc.status()
             if st["qr_b64"]:

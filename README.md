@@ -15,12 +15,11 @@ token 本身,签发后完全自动化。token 与角色绑定,一个 token 查�
 ## 安装
 
 1. 插件目录(或 zip 解压)放进 AstrBot 的 `data/plugins/`
-2. 安装浏览器自动化依赖(**面板一键获取需要,查询功能不需要**):
-   ```bash
-   pip install -r data/plugins/astrbot_plugin_yanyun_query/requirements.txt
-   playwright install chromium        # Linux 服务器如报缺库,再执行 playwright install-deps
-   ```
-   有系统 Chrome/Edge 的机器会优先复用,无需下载 chromium
+2. **浏览器环境会自动安装,无需手动操作**:
+   - 插件加载时后台检查:没有 playwright 包就 `pip install playwright`,没有浏览器就下载 chromium(约 150MB,默认 npmmirror 镜像)
+   - 有系统 Chrome/Edge 的机器直接复用,不下载任何东西
+   - 如果想关闭自动安装:`auto_install_browser: false` / `preinstall_browser: false`
+   - Linux 裸机若提示缺系统库,以 root 执行一次 `playwright install-deps chromium`
 3. 重启 AstrBot(或 WebUI 插件页重载)
 4. 发 `燕云帮助` 确认生效
 

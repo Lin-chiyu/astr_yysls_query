@@ -19,14 +19,15 @@ desc: |
   - 燕云状态 — 凭据池自检(仅管理员)
   - 燕云帮助 — 用法说明
 
-  **依赖**
+  **依赖(全自动)**
 
-  查询功能开箱即用;面板一键扫码需 AstrBot >= 4.27.5 并安装 playwright
-  (`pip install playwright && playwright install chromium`)。配置大模型后也支持自然语言唤起。
+  查询功能开箱即用。首次使用时插件会**自动检测并安装**无头浏览器
+  (没有 playwright 就 pip 装,没有浏览器就下载 chromium;有系统 Chrome/Edge 直接复用)。
+  WebUI 面板扫码需 AstrBot >= 4.27.5。配置大模型后还支持自然语言唤起。
 
   ⚠ 调用网易非公开接口,随时可能失效,仅供学习交流。
 short_desc: 查询燕云十六声角色档案,支持面板一键扫码获取凭据
-version: v2.1.1
+version: v2.2.0
 author: 林迟羽
 repo: https://github.com/Lin-chiyu/astr_yysls_query
 astrbot_version: ">=4.27.5,<5"

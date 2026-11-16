@@ -28,5 +28,20 @@
     "description": "凭据 token 失效(401)后的冷却秒数,冷却期内不再使用该凭据。默认 3600(1小时)。",
     "type": "int",
     "default": 3600
+  },
+  "auto_install_browser": {
+    "description": "缺少无头浏览器时自动安装(首次会 pip 安装 playwright 并下载 chromium 约 150MB)。关闭后扫码/面板功能需要手动装好环境。",
+    "type": "bool",
+    "default": true
+  },
+  "preinstall_browser": {
+    "description": "插件加载时后台预装浏览器。开启后首次扫码不用干等下载;如果你只在查询、不用扫码功能,可以关掉。",
+    "type": "bool",
+    "default": true
+  },
+  "browser_download_mirror": {
+    "description": "chromium 下载镜像地址。默认用 npmmirror 国内镜像;下载失败会自动重试官方源。留空则使用默认镜像。",
+    "type": "string",
+    "default": "https://npmmirror.com/mirrors/playwright/"
   }
 }
