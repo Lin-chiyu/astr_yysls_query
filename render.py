@@ -415,33 +415,6 @@ def _render_explore(data: dict, info_data: dict | None = None) -> list[str]:
         lines.append(f"  {name} " + " · ".join(bits))
     return lines if len(lines) > 1 else []
 
-
-def _render_region_collect(info: dict) -> list[str]:
-    """区域收集进度(chestByRegion 宝箱 / qiQiaoByRegion 蹊跷 → exploreMapList 区域名)。"""
-    eml = (_load_mappings().get("data_report") or {}).get("exploreMapList") or []
-    id2name = {}
-    for item in eml:
-        if isinstance(item, dict) and "id" in item:
-            id2name[str(item["id"])] = item.get("name")
-    chests = {str(x.get("region")): x.get("count") for x in info.get("chestByRegion") or [] if isinstance(x, dict)}
-    qiqiao = {str(x.get("region")): x.get("count") for x in info.get("qiQiaoByRegion") or [] if isinstance(x, dict)}
-    if not chests and not qiqiao:
-        return []
-    lines = ["区域收集:"]
-    for rid in sorted(set(chests) | set(qiqiao), key=lambda x: int(x) if x.isdigit() else 0):
-        name = id2name.get(rid) or f"区域{rid}"
-        bits = []
-        if rid in chests:
-            bits.append(f"宝箱 {chests[rid]}")
-        if rid in qiqiao:
-            bits.append(f"蹊跷 {qiqiao[rid]}")
-        if bits:
-            lines.append(f"  {name}: " + ", ".join(bits))
-    return lines
-
-
-
-
 def _flat_pairs(obj: Any, prefix: str = "", depth: int = 0, max_depth: int = 4):
     pairs: list[tuple[str, Any]] = []
     if depth > max_depth:

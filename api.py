@@ -278,39 +278,6 @@ class DashenClient:
         url = "https://inf-act.ds.163.com/v1/act-web/act-play/h72-role-tool/benchmark"
         return await self.post_with_cookies(url, {}, cred)
 
-    async def query_bind_list(self, role_id: str) -> dict[str, Any]:
-        """账号绑定角色列表(自动探测角色编号),cookie 鉴权。"""
-        cred = self._pool.by_role(role_id)
-        if cred is None:
-            raise DashenAPIError(f"凭据池里没有角色 {role_id}。")
-        url = "https://inf.ds.163.com/v1/web/role-list-query/getBindList"
-        return await self.post_with_cookies(url, {}, cred)
-
-    # -- 业务方法 ------------------------------------------------------------
-
-    async def query_proxy_role(self, role_id: str) -> dict[str, Any]:
-        """角色全量档案(昵称/等级/门派/成就/修为/外观等,数据最全)。"""
-        cred = self._pool.by_role(role_id)
-        if cred is None:
-            raise DashenAPIError(
-                f"凭据池里没有角色 {role_id}。可查询的角色以管理员配置的凭据为准。"
-            )
-        return await self.post(EP_PROXY_ROLE, cred)
-
-    async def query_role_info(self, role_id: str) -> dict[str, Any]:
-        """家园/突破日志/功法日常等。"""
-        cred = self._pool.by_role(role_id)
-        if cred is None:
-            raise DashenAPIError(f"凭据池里没有角色 {role_id}。")
-        return await self.post(EP_ROLE_INFO, cred)
-
-    async def query_pvp(self, role_id: str) -> dict[str, Any]:
-        """PVP 数据。"""
-        cred = self._pool.by_role(role_id)
-        if cred is None:
-            raise DashenAPIError(f"凭据池里没有角色 {role_id}。")
-        return await self.post(EP_QUERY_PVP, cred)
-
     async def health_check(self) -> list[str]:
         """逐个凭据真实调一次接口,返回自检结果。"""
         results = []
