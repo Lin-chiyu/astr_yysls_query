@@ -316,3 +316,21 @@ class DashenClient:
             except DashenAPIError as e:
                 results.append(f"[异常] {cred.name}:{e}")
         return results
+
+    async def verify_credential(self, role_id: str) -> tuple[bool, str]:
+        """探测该角色现有 token 是否仍有效。
+
+        返回 (ok, reason):ok=True 表示凭据可用;False 时 reason 为
+        "missing"(池里没有该角色)、"invalid"(token 已失效)或
+        "error:<原因>"(网络/业务异常,无法判定)。
+        """
+        cred = self._pool.by_role(role_id)
+        if cred is None:
+            return False, "missing"
+        try:
+            await self.post(EP_PROXY_ROLE, cred)
+            return True, ""
+        except TokenInvalidError:
+            return False, "invalid"
+        except DashenAPIError as e:
+            return False, f"error:{e}"
