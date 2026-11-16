@@ -14,7 +14,7 @@ from typing import Any
 
 import astrbot.api.message_components as Comp
 from astrbot.api import AstrBotConfig, logger
-from astrbot.api.event import AstrMessageEvent, MessageChain, MessageEventResult, filter
+from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core.utils.session_waiter import SessionController, session_waiter
 
@@ -49,7 +49,7 @@ HELP_TEXT = """【燕云十六声查询】指令列表
 ⚠ 调用的是网易非公开接口,token 年度有效,仅供学习交流。"""
 
 
-@register("astrbot_plugin_yanyun_query", "xiaoyu", "燕云十六声角色查询", "v2.1.0")
+@register("astrbot_plugin_yanyun_query", "xiaoyu", "燕云十六声角色查询", "v2.1.1")
 class YanyunQueryPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -147,80 +147,74 @@ class YanyunQueryPlugin(Star):
         return bind.get("identity"), ""
 
     @filter.llm_tool(name="yanyun_query_profile")
-    async def yanyun_query_profile(self, event: AstrMessageEvent, role_id: str = "") -> MessageEventResult:
+    async def yanyun_query_profile(self, event: AstrMessageEvent, role_id: str = "") -> str:
         """查询燕云十六声游戏角色的完整档案,包括等级、门派、修为、成就、外观收集、各区域探索度、区域收集(宝箱/蹊跷数量)、流派配置(套装、功法、心法、装备、奇术)。当用户想查看燕云十六声的角色数据、角色信息、探索度、流派、装备、心法等内容时调用此工具。
         Args:
             role_id(string): 要查询的燕云角色编号(纯数字)。如果用户没有明确指定角色编号,请传空字符串,将自动查询该用户绑定的角色
         """
         role_id, err = await self._resolve_role_for_llm(event, role_id)
         if err:
-            yield event.plain_result(err)
-            return
+            return err
         blocks = await self._fetch_blocks(role_id, "proxy", f"燕云角色档案 · {role_id}")
-        yield event.plain_result("\n\n".join(blocks))
+        return "\n\n".join(blocks)
 
     @filter.llm_tool(name="yanyun_query_detail")
-    async def yanyun_query_detail(self, event: AstrMessageEvent, role_id: str = "") -> MessageEventResult:
+    async def yanyun_query_detail(self, event: AstrMessageEvent, role_id: str = "") -> str:
         """查询燕云十六声角色的家园信息、突破记录、功法日常成绩、游戏面板最终属性(气血/外功攻击/防御/会心率等)和区域收集明细。当用户想查看燕云角色的面板属性、战斗力数值、家园、突破、收集进度明细时调用此工具。
         Args:
             role_id(string): 要查询的燕云角色编号(纯数字)。如果用户没有明确指定角色编号,请传空字符串,将自动查询该用户绑定的角色
         """
         role_id, err = await self._resolve_role_for_llm(event, role_id)
         if err:
-            yield event.plain_result(err)
-            return
+            return err
         try:
             resp_info = await self.client.query_role_info(role_id)
             text = render_role_info(resp_info, f"燕云家园与日常 · {role_id}")
             resp_proxy = await self.client.query_proxy_role(role_id)
-            attrs = _render_attrs(resp_proxy.get("data") or {})
+            attrs = _render_attrs(resp_proxy.get("data") or {}, as_blocks=True)
             if attrs:
                 text += "\n\n―― 属性一览 ――\n" + "\n".join(attrs)
-            yield event.plain_result(text)
+            return text
         except DashenAPIError as e:
-            yield event.plain_result(f"[燕云查询] {e}")
+            return f"[燕云查询] {e}"
         except Exception as e:
             logger.error(f"[燕云查询] 内部错误: {e}")
-            yield event.plain_result(f"[燕云查询] 内部错误:{type(e).__name__}")
+            return f"[燕云查询] 内部错误:{type(e).__name__}"
 
     @filter.llm_tool(name="yanyun_query_pvp")
-    async def yanyun_query_pvp(self, event: AstrMessageEvent, role_id: str = "") -> MessageEventResult:
+    async def yanyun_query_pvp(self, event: AstrMessageEvent, role_id: str = "") -> str:
         """查询燕云十六声角色的 PVP 对战数据类型列表。当用户想查看燕云角色的 PVP 战绩、对战数据时调用此工具。
         Args:
             role_id(string): 要查询的燕云角色编号(纯数字)。如果用户没有明确指定角色编号,请传空字符串,将自动查询该用户绑定的角色
         """
         role_id, err = await self._resolve_role_for_llm(event, role_id)
         if err:
-            yield event.plain_result(err)
-            return
-        yield event.plain_result(await self._fetch_rendered(role_id, "pvp", f"燕云PVP · {role_id}"))
+            return err
+        blocks = await self._fetch_blocks(role_id, "pvp", f"燕云PVP · {role_id}")
+        return "\n\n".join(blocks)
 
     @filter.llm_tool(name="yanyun_analyze_build")
-    async def yanyun_analyze_build(self, event: AstrMessageEvent, role_id: str = "") -> MessageEventResult:
+    async def yanyun_analyze_build(self, event: AstrMessageEvent, role_id: str = "") -> str:
         """获取燕云十六声角色的流派分析数据包:属性面板总值、战斗面板(外功攻击/属攻)、流派配置(主副功法/心法/装备套装/奇术)、流派名称、以及全服同流派同等级段的基准对比(均值/极值)。当用户想了解角色强度评价、培养方向、词条建议、流派对比、超越率,或请求"调号/AI调号"类分析时调用此工具,并将返回的数据整理为分析建议回复。
         Args:
             role_id(string): 要分析的燕云角色编号(纯数字)。如果用户没有明确指定角色编号,请传空字符串,将自动使用该用户绑定的角色
         """
         role_id, err = await self._resolve_role_for_llm(event, role_id)
         if err:
-            yield event.plain_result(err)
-            return
+            return err
         try:
             panel, bench = await asyncio.gather(
                 self.client.query_role_data(role_id),
                 self.client.query_benchmark(role_id),
             )
         except TokenInvalidError as e:
-            yield event.plain_result(f"[燕云面板] {e}")
-            return
+            return f"[燕云面板] {e}"
         except DashenAPIError as e:
-            yield event.plain_result(f"[燕云面板] {e}")
-            return
+            return f"[燕云面板] {e}"
         except Exception as e:
             logger.error(f"[燕云查询] 内部错误: {e}")
-            yield event.plain_result(f"[燕云查询] 内部错误:{type(e).__name__}")
-            return
-        yield event.plain_result(_render_panel_v2(panel.get("result") or {}, bench))
+            return f"[燕云查询] 内部错误:{type(e).__name__}"
+        return _render_panel_v2(panel.get("result") or {}, bench)
 
     @filter.command("燕云面板", alias={"yy面板"})
     async def yy_panel(self, event: AstrMessageEvent, identity: str = ""):
