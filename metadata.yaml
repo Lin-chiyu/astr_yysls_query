@@ -21,7 +21,7 @@ desc: |
   ⚠ 本插件调用的是网易非公开接口,随时可能失效,仅供学习交流。
 short_desc: 查询燕云十六声角色档案,支持面板一键扫码获取凭据
 version: v2.1.1
-author: xiaoyu
+author: 林迟羽
 repo: https://github.com/Lin-chiyu/astr_yysls_query
 astrbot_version: ">=4.27.5,<5"
 tags:
