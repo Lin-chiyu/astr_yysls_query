@@ -28,7 +28,7 @@ desc: |
 
   ⚠ 调用网易非公开接口,随时可能失效,仅供学习交流。
 short_desc: 查询燕云十六声角色档案,支持流派养成对标分析与面板一键扫码获取凭据
-version: v1.0.3
+version: v1.0.4
 author: 林迟羽
 repo: https://github.com/Lin-chiyu/astr_yysls_query
 astrbot_version: ">=4.27.5,<5"

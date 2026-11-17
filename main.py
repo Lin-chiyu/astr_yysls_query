@@ -54,7 +54,7 @@ HELP_TEXT = """【燕云十六声查询】指令列表
 ⚠ 调用的是网易非公开接口,token 年度有效,仅供学习交流。"""
 
 
-@register("astrbot_plugin_yanyun_query", "林迟羽", "燕云十六声角色查询(角色档案/探索度/流派配置/面板属性)", "v1.0.3")
+@register("astrbot_plugin_yanyun_query", "林迟羽", "燕云十六声角色查询(角色档案/探索度/流派配置/面板属性)", "v1.0.4")
 class YanyunQueryPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -442,22 +442,41 @@ class YanyunQueryPlugin(Star):
         async for r in self._do_bind(event, rid):
             yield r
 
-    @filter.regex(r"^(?:燕云绑定|yy绑定)(?![ \t])[^\d]*\d")
+    @filter.regex(r"^(?:燕云绑定|yy绑定)(?![ \t])[^0-9]*[0-9]")
     async def yy_bind_loose(self, event: AstrMessageEvent):
-        """兜底:兼容「燕云绑定0455681870」「燕云绑定<0455681870>」等无空格写法。
-
-        规则:命令名之后,取第一个数字到最后一个数字之间的全部数字作为角色编号。
-        """
+        """兜底:兼容「燕云绑定0455681870」「燕云绑定<0455681870>」等无空格写法。"""
         text = event.get_message_str().strip()
-        digits = "".join(re.findall(r"\d", text))
-        if not digits:
-            return
-        logger.info(f"[燕云查询] 兜底匹配绑定指令:{text!r} -> 角色 {digits}")
-        async for r in self._do_bind(event, digits):
+        logger.info(f"[燕云查询] 兜底匹配绑定指令:{text!r}")
+        async for r in self._do_bind(event, text):
             yield r
+
+    @staticmethod
+    def _parse_role_id(text: str) -> tuple[str, str]:
+        """从输入里提取角色编号,返回 (编号, 错误提示)。
+
+        规则:取第一个数字到最后一个数字之间的内容;该段若含非数字字符
+        则视为格式错误(如「12345是是是555」),不自动拼接,直接提示用户。
+        """
+        s = (text or "").strip()
+        if not s:
+            return "", "没识别到角色编号,请重发:燕云绑定 <角色编号>"
+        hits = list(re.finditer(r"[0-9]", s))
+        if not hits:
+            return "", f"没识别到角色编号:「{s}」里没有数字,请重发:燕云绑定 <角色编号>"
+        inner = s[hits[0].start() : hits[-1].end()]
+        if not re.fullmatch(r"[0-9]+", inner):
+            return "", (
+                f"角色编号格式不对:「{s}」里编号中间夹了非数字字符。\n"
+                "角色编号必须是连续数字,请重发:燕云绑定 <角色编号>"
+            )
+        return inner, ""
 
     async def _do_bind(self, event: AstrMessageEvent, rid: str):
         """绑定 + 凭据校验 + 必要时扫码(yy_bind / yy_bind_loose 共用)。"""
+        rid, err = self._parse_role_id(rid)
+        if err:
+            yield event.plain_result(err)
+            return
         user_id = event.get_sender_id()
         is_group = bool(event.get_group_id())
         await self.store.set(user_id, rid)
