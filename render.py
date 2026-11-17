@@ -163,12 +163,59 @@ def render_proxy_role(resp: dict[str, Any], title: str, info_data: dict | None =
     return "\n".join("\n".join(b) for b in blocks)
 
 
-def _render_attrs(data: dict, as_blocks: bool = False) -> list[str] | str:
-    """属性一览:五维(real_attr.* 扁平键)+ 全装备词条汇总(affix_data 映射名称)。
+# 射决(槽9)/ 弓(槽21):弓箭类装备,明细与合并汇总均不展示(用户最终决定整块去掉)
+ARCHER_SKIP_SLOTS = frozenset({"9", "21"})
 
-    as_blocks=True 时返回 [属性一览整块](供合并转发);False 返回行列表(兼容旧调用)。
+
+# 「合并汇总」词条展示顺序(用户指定清单);清单外词条按数值降序排在清单之后
+AFFIX_SUMMARY_ORDER = (
+    "体", "劲", "御", "敏", "势",
+    "最小外功攻击", "最大外功攻击", "最小破竹攻击", "最大破竹攻击",
+    "最小裂石攻击", "最大裂石攻击", "最小鸣金攻击", "最大鸣金攻击",
+    "最小牵丝攻击", "最大牵丝攻击", "最小无相攻击", "最大无相攻击",
+    "气血最大值", "外功防御",
+    "精准率", "会心率", "实际会心率", "会意率", "实际会意率",
+    "剑增伤", "枪增伤", "伞增伤", "扇增伤", "鼓增伤",
+    "手甲增伤", "双刀增伤", "绳镖增伤", "陌刀武学增伤", "横刀武学增伤",
+    "全武学增伤", "对首领单位增伤", "对玩家单位增效", "全奇术增伤",
+)
+
+
+def _affix_norm(name: str) -> str:
+    """归一化:去掉 增伤/增效/武学增伤 类尾缀,便于「手甲武学增伤↔手甲增伤」这类匹配。"""
+    for suf in ("武学增伤", "武学增效", "增伤", "增效"):
+        if name.endswith(suf) and len(name) > len(suf):
+            return name[: -len(suf)]
+    return name
+
+
+def _summary_order(name: str) -> int:
+    """清单内按位置返回,清单外返回清单长度(排最后)。"""
+    if name in AFFIX_SUMMARY_ORDER:
+        return AFFIX_SUMMARY_ORDER.index(name)
+    n = _affix_norm(name)
+    for i, kw in enumerate(AFFIX_SUMMARY_ORDER):
+        k = _affix_norm(kw)
+        if n == k or n.startswith(k) or k.startswith(n):
+            return i
+    return len(AFFIX_SUMMARY_ORDER)
+
+
+def _collect_attrs(data: dict) -> dict:
+    """把扁平存档整理成「属性一览」视图数据,文本渲染与图片渲染共用。
+
+    词条按槽位号升序逐件列出,再按名称合并;合并项带出现条数
+    (如 最小外功攻击 合计 1086.7 / 8条)。百分比词条按游戏 unit 格式串
+    ({0:.1%})口径 ×100 显示(0.162 → +16.2%)。
+    射决/弓(ARCHER_SKIP_SLOTS)明细与汇总均不展示。
+
+    返回 {nickname, level(人物等级), wuwei, per_equip: [{slot, slot_no, name, level(装备等级), suit, affixes}],
+          totals(不含弓箭类), affix_total(展示词条总条数)};无任何数据时各列表为空。
     """
-    wuwei = []
+    nickname = str(_get(data, "base.nickname") or "").strip()
+    level = _get(data, "base.level")
+
+    wuwei: list[tuple[str, Any]] = []
     for k, v in data.items():
         if isinstance(k, str) and k.startswith("real_attr."):
             sub = k.split(".", 1)[1]
@@ -179,15 +226,38 @@ def _render_attrs(data: dict, as_blocks: bool = False) -> list[str] | str:
                 v = int(fv) if fv.is_integer() else round(fv, 1)
             except (TypeError, ValueError):
                 pass
-            wuwei.append(f"{_map_name('attr', sub) or sub} {v}")
+            wuwei.append((_map_name("attr", sub) or sub, v))
 
     affix_map = _load_mappings().get("affix") or {}
+    equip_map = _load_mappings().get("equip") or {}
+
     totals: dict[tuple[str, bool], float] = {}
+    counts: dict[tuple[str, bool], int] = {}
+    per_equip: list[dict] = []
     equips = _get(data, "combat_plan.wear_equips")
     if isinstance(equips, dict):
-        for slot_no, item in equips.items():
+
+        def _slot_order(kv: tuple[Any, Any]) -> tuple[int, Any]:
+            s = str(kv[0])
+            return (0, int(s)) if s.isdigit() else (1, s)
+
+        for slot_no, item in sorted(equips.items(), key=_slot_order):
+            if not isinstance(item, dict):
+                continue
             ex = (item or {}).get("ex") or {}
-            for aff in ex.get("base_affixes") or []:
+            affs = ex.get("base_affixes") or []
+            if not affs:
+                continue  # 占位装备无词条,不计入
+            eq_name = _map_name("equip", item.get("No")) or f"装备{item.get('No')}"
+            slot_label = _map_name("slot", slot_no) or f"槽{slot_no}"
+            eq_info = equip_map.get(str(item.get("No"))) or {}
+            equip_level = eq_info.get("level") if isinstance(eq_info, dict) else None
+            suffix_id = ex.get("suffix")
+            suit = _map_name("suffix", suffix_id) if suffix_id is not None else None
+            if str(slot_no) in ARCHER_SKIP_SLOTS:
+                continue  # 弓箭类整块不展示(变量名勿用 level,避免遮蔽人物等级)
+            item_affixes: list[tuple[str, str]] = []
+            for aff in affs:
                 try:
                     aid, val = aff[0], float(aff[1])
                 except (IndexError, TypeError, ValueError):
@@ -198,20 +268,70 @@ def _render_attrs(data: dict, as_blocks: bool = False) -> list[str] | str:
                 is_percent = "%" in unit
                 key = (name, is_percent)
                 totals[key] = totals.get(key, 0.0) + val
+                counts[key] = counts.get(key, 0) + 1
+                if is_percent:
+                    disp = f"+{val * 100:.1f}%"
+                else:
+                    v = int(val) if float(val).is_integer() else round(val, 1)
+                    disp = f"+{v}"
+                item_affixes.append((name, disp))
+            if item_affixes:
+                per_equip.append(
+                    {"slot": slot_label, "slot_no": str(slot_no), "name": eq_name, "level": equip_level, "suit": suit, "affixes": item_affixes}
+                )
+
+    total_entries: list[tuple[str, str, int, float]] = []
+    for (name, is_p), val in totals.items():
+        if is_p:
+            disp = f"+{val * 100:.1f}%"
+        else:
+            v = int(val) if float(val).is_integer() else round(val, 1)
+            disp = f"+{v}"
+        total_entries.append((name, disp, counts[(name, is_p)], abs(val)))
+    total_entries.sort(key=lambda e: (_summary_order(e[0]), -e[3]))
+    total_rows = [(n, d, c) for n, d, c, _ in total_entries]
+
+    return {
+        "nickname": nickname,
+        "level": level,
+        "wuwei": wuwei,
+        "per_equip": per_equip,
+        "totals": total_rows,
+        "affix_total": sum(len(e["affixes"]) for e in per_equip),
+    }
+
+
+def _equip_tag(eq: dict) -> str:
+    """装备头部的套装/等级标注,如 (倾觞·115级);缺啥省啥,全缺返回空串。"""
+    parts = []
+    if eq.get("suit"):
+        parts.append(str(eq["suit"]))
+    if eq.get("level") not in (None, ""):
+        parts.append(f"{eq['level']}级")
+    return f"({('·'.join(parts))})" if parts else ""
+
+
+def _render_attrs(data: dict, as_blocks: bool = False) -> list[str] | str:
+    """属性一览(文本版):五维 + 装备词条(按装备分列 + 合并汇总带条数)。
+
+    数据来源见 _collect_attrs。as_blocks=True 时返回 [属性一览整块](供合并转发);
+    False 返回行列表(兼容旧调用)。
+    """
+    view = _collect_attrs(data)
 
     lines: list[str] = []
-    if wuwei:
-        lines.append("五维: " + ", ".join(wuwei))
+    if view["wuwei"]:
+        lines.append("五维: " + ", ".join(f"{n} {v}" for n, v in view["wuwei"]))
 
-    if totals:
-        lines.append("装备词条汇总:")
-        flat = [(n, v) for (n, is_p), v in totals.items() if not is_p]
-        pct = [(n, v) for (n, is_p), v in totals.items() if is_p]
-        for name, val in sorted(flat, key=lambda kv: -abs(kv[1])):
-            v = int(val) if float(val).is_integer() else round(val, 1)
-            lines.append(f"  {name} +{v}")
-        for name, val in sorted(pct, key=lambda kv: -abs(kv[1])):
-            lines.append(f"  {name} +{val * 100:.1f}%")
+    if view["per_equip"]:
+        lines.append(f"装备词条(按装备,共{view['affix_total']}条):")
+        for eq in view["per_equip"]:
+            lines.append(f"  {eq['slot']}·{eq['name']}{_equip_tag(eq)}")
+            lines.extend(f"    {n} {d}" for n, d in eq["affixes"])
+
+    if view["totals"]:
+        lines.append("装备词条汇总(不含弓箭类):")
+        lines.extend(f"  {n} {d} {c}条" for n, d, c in view["totals"])
 
     if as_blocks:
         if lines:

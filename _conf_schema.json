@@ -43,5 +43,15 @@
     "description": "chromium 下载镜像地址。默认用 npmmirror 国内镜像;下载失败会自动重试官方源。留空则使用默认镜像。",
     "type": "string",
     "default": "https://npmmirror.com/mirrors/playwright/"
+  },
+  "advisor_image": {
+    "description": "「燕云分析」以图片卡发送对标报告(词条/战力对标+养成方向)。渲染失败自动回退文本卡片;关闭后始终用文本。",
+    "type": "bool",
+    "default": true
+  },
+  "profile_image": {
+    "description": "「燕云我的/燕云查询」以图片卡发送角色档案(功力/探索度进度条/流派配置)。渲染失败自动回退文本;关闭后始终用文本。",
+    "type": "bool",
+    "default": true
   }
 }

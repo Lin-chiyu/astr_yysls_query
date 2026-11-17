@@ -10,6 +10,7 @@ import asyncio
 import base64
 import json
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,8 @@ from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core.utils.session_waiter import SessionController, session_waiter
 
 from .api import DashenAPIError, DashenClient, TokenInvalidError
+from .attrs_image import render_advisor_image, render_combined_image, render_profile_image
+from .build_advisor import build_advisor, make_ai_prompt, render_text as render_advisor_text, rule_summary
 from .render import _render_attrs, render_generic, render_pvp, render_proxy_role, render_role_info
 from .storage import BindingStore
 from .yanyun_login import LoginService, ensure_browser_ready
@@ -37,10 +40,11 @@ HELP_TEXT = """【燕云十六声查询】指令列表
 - 燕云扫码(私聊):扫码登录并自动绑定自己的角色 —— 推荐方式
 - 燕云绑定 <角色编号>:绑定管理员已添加到凭据池的角色
 - 燕云解绑:解除绑定
-- 燕云我的:查询自己绑定的角色档案
-- 燕云查询 <角色编号>:查询凭据池内的角色
-- 燕云详情 <角色编号>:家园日常 + 面板属性 + 区域收集
+- 燕云我的:查询自己绑定的角色档案(角色名片图 + 探索度进度条)
+- 燕云查询 <角色编号>:查询凭据池内的角色(同「燕云我的」卡片)
+- 燕云详情 <角色编号>:家园日常 + 面板属性 + 区域收集(属性一览以图片发送,失败自动回退文本)
 - 燕云面板 <角色编号>:调号助手数据(属性面板/流派/全服基准对比)
+- 燕云分析 <角色编号>:流派养成对标报告(词条/战力对标 + 带部位的洗练方向,图片卡)
 - 燕云战绩 <角色编号>:PVP 数据
 - 燕云状态:凭据自检(仅管理员)
 - 燕云帮助:本说明
@@ -50,7 +54,7 @@ HELP_TEXT = """【燕云十六声查询】指令列表
 ⚠ 调用的是网易非公开接口,token 年度有效,仅供学习交流。"""
 
 
-@register("astrbot_plugin_yanyun_query", "林迟羽", "燕云十六声角色查询(角色档案/探索度/流派配置/面板属性)", "v1.0.2")
+@register("astrbot_plugin_yanyun_query", "林迟羽", "燕云十六声角色查询(角色档案/探索度/流派配置/面板属性)", "v1.0.3")
 class YanyunQueryPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -179,9 +183,32 @@ class YanyunQueryPlugin(Star):
         role_id, err = await self._resolve_role_for_llm(event, role_id)
         if err:
             return err
-        blocks = await self._fetch_blocks(role_id, "proxy", f"燕云角色档案 · {role_id}")
-        await self._deliver_to_user(event, blocks)
-        return "\n".join(blocks)[:600]
+        try:
+            resp_info, resp_proxy = await asyncio.gather(
+                self.client.query_role_info(role_id),
+                self.client.query_proxy_role(role_id),
+            )
+        except TokenInvalidError as e:
+            return f"[燕云查询] {e}"
+        except DashenAPIError as e:
+            return f"[燕云查询] {e}"
+        except Exception as e:
+            logger.error(f"[燕云查询] 内部错误: {e}")
+            return f"[燕云查询] 内部错误:{type(e).__name__}"
+        # 档案卡主动发给用户(图片优先,失败回退文本卡片)
+        img_path = await self._render_profile_image_file(resp_proxy.get("data") or {}, resp_info.get("data") or {})
+        if img_path is not None:
+            try:
+                await event.send(event.chain_result([Comp.Image.fromFileSystem(str(img_path))]))
+            except Exception as e:
+                logger.warning(f"[燕云图片] 档案卡图片发送失败,回退文本: {e}")
+                img_path = None
+        blocks = render_proxy_role(resp_proxy, f"燕云角色档案 · {role_id}",
+                                   info_data=resp_info.get("data") or {}, as_blocks=True)
+        if img_path is None:
+            await self._deliver_to_user(event, blocks)
+        # 图片已发用户时数据仍回灌,供 LLM 对话
+        return "\n".join(blocks)[:900]
 
     @filter.llm_tool(name="yanyun_query_detail")
     async def yanyun_query_detail(self, event: AstrMessageEvent, role_id: str = "") -> str:
@@ -198,11 +225,25 @@ class YanyunQueryPlugin(Star):
                 self.client.query_proxy_role(role_id),
             )
             blocks = render_role_info(resp_info, f"燕云家园与日常 · {role_id}", as_blocks=True)
-            attrs = _render_attrs(resp_proxy.get("data") or {}, as_blocks=True)
-            if attrs:
-                blocks.append("\n".join(attrs))
-            await self._deliver_to_user(event, blocks)
-            return "\n\n".join(blocks)[:600]
+            attrs_data = resp_proxy.get("data") or {}
+            attrs = _render_attrs(attrs_data, as_blocks=True)
+            attrs_text = "\n".join(attrs) if attrs else ""
+            img_path = await self._render_combined_image_file(attrs_data, resp_info.get("data") or {})
+            if img_path is not None:
+                try:
+                    await event.send(event.chain_result([Comp.Image.fromFileSystem(str(img_path))]))
+                except Exception as e:
+                    logger.warning(f"[燕云图片] 图片发送失败,回退文本: {e}")
+                    img_path = None
+            if img_path is None:
+                if attrs_text:
+                    blocks.append(attrs_text)
+                await self._deliver_to_user(event, blocks)
+            # 图片成功=只发图片;LLM 摘要始终带上全部数据
+            summary = list(blocks)
+            if img_path is not None and attrs_text:
+                summary.append(attrs_text)
+            return "\n\n".join(summary)[:600]
         except DashenAPIError as e:
             return f"[燕云查询] {e}"
         except Exception as e:
@@ -224,7 +265,7 @@ class YanyunQueryPlugin(Star):
 
     @filter.llm_tool(name="yanyun_analyze_build")
     async def yanyun_analyze_build(self, event: AstrMessageEvent, role_id: str = "") -> str:
-        """获取燕云十六声角色的流派分析数据包:属性面板总值、战斗面板(外功攻击/属攻)、流派配置(主副功法/心法/装备套装/奇术)、流派名称、以及全服同流派同等级段的基准对比(均值/极值)。当用户想了解角色强度评价、培养方向、词条建议、流派对比、超越率,或请求"调号/AI调号"类分析时调用此工具,并将返回的数据整理为分析建议回复。
+        """获取燕云十六声角色的养成对标报告:词条数量对标(带部位位置)、战力模块对标、养成方向、属性面板总值、全服基准对比。当用户想了解角色强度评价、培养方向、词条洗练建议、养成分析,或请求"调号/AI调号"类分析时调用此工具。对标报告卡片会主动发给用户;你只需基于返回的数据写一段简短的养成推荐回复,不要编造数据。
         Args:
             role_id(string): 要分析的燕云角色编号(纯数字)。如果用户没有明确指定角色编号,请传空字符串,将自动使用该用户绑定的角色
         """
@@ -232,20 +273,78 @@ class YanyunQueryPlugin(Star):
         if err:
             return err
         try:
+            resp_info, resp_proxy = await asyncio.gather(
+                self.client.query_role_info(role_id),
+                self.client.query_proxy_role(role_id),
+            )
+            report = build_advisor(resp_proxy.get("data") or {}, resp_info.get("data") or {})
+        except TokenInvalidError as e:
+            return f"[燕云分析] {e}"
+        except DashenAPIError as e:
+            return f"[燕云分析] {e}"
+        except Exception as e:
+            logger.error(f"[燕云查询] 内部错误: {e}")
+            return f"[燕云查询] 内部错误:{type(e).__name__}"
+        if report["liupai"] == "未知流派":
+            return f"[燕云分析] 角色 {role_id} 的主副功法组合暂未收录流派映射,无法生成对标报告。"
+        # 对标报告卡片主动发给用户(图片优先,失败回退文本卡片)
+        img_path = await self._render_advisor_image_file(report)
+        if img_path is not None:
+            try:
+                await event.send(event.chain_result([Comp.Image.fromFileSystem(str(img_path))]))
+            except Exception as e:
+                logger.warning(f"[燕云图片] 养成分析图片发送失败,回退文本: {e}")
+                img_path = None
+        if img_path is None:
+            await self._deliver_to_user(event, render_advisor_text(report))
+        # 面板/全服基准数据包(cookie 可用时提供,失败不影响对标报告)
+        panel_text = "(属性面板/全服基准数据不可用,缺少登录 cookie)"
+        try:
             panel, bench = await asyncio.gather(
                 self.client.query_role_data(role_id),
                 self.client.query_benchmark(role_id),
             )
-        except TokenInvalidError as e:
-            return f"[燕云面板] {e}"
-        except DashenAPIError as e:
-            return f"[燕云面板] {e}"
+            panel_text = _render_panel_v2(panel.get("result") or {}, bench)
+        except (DashenAPIError, TokenInvalidError) as e:
+            logger.info(f"[燕云分析] 面板/基准数据跳过: {e}")
         except Exception as e:
             logger.error(f"[燕云查询] 内部错误: {e}")
-            return f"[燕云查询] 内部错误:{type(e).__name__}"
-        text = _render_panel_v2(panel.get("result") or {}, bench)
-        await self._deliver_to_user(event, [b for b in text.split("\n\n") if b.strip()])
-        return text[:600]
+        advisor_text = "\n".join(render_advisor_text(report))
+        return f"{advisor_text}\n\n―― 属性面板与全服基准 ――\n{panel_text}\n\n―― 你的分析素材(报告已发用户) ――\n{make_ai_prompt(report)}"[:3500]
+
+    @filter.command("燕云分析", alias={"yy分析"})
+    async def yy_analyze(self, event: AstrMessageEvent, identity: str = ""):
+        identity = identity.strip()
+        if not identity:
+            bind = await self.store.get(event.get_sender_id())
+            identity, err = self._resolve_role("", bind)
+            if err:
+                yield event.plain_result("用法:燕云分析 <角色编号>(或先「燕云绑定」)")
+                return
+        try:
+            resp_info, resp_proxy = await asyncio.gather(
+                self.client.query_role_info(identity),
+                self.client.query_proxy_role(identity),
+            )
+            report = build_advisor(resp_proxy.get("data") or {}, resp_info.get("data") or {})
+        except DashenAPIError as e:
+            yield event.plain_result(f"[燕云分析] {e}")
+            return
+        except Exception as e:
+            logger.error(f"[燕云查询] 内部错误: {e}")
+            yield event.plain_result(f"[燕云分析] 内部错误:{type(e).__name__}")
+            return
+        if report["liupai"] == "未知流派":
+            yield event.plain_result(
+                f"[燕云分析] 主功法 {report['kongfu_main']} · 副功法 {report['kongfu_sub']} 的组合暂未收录流派映射,无法对标。")
+            return
+        img_path = await self._render_advisor_image_file(report)
+        if img_path is not None:
+            yield event.chain_result([Comp.Image.fromFileSystem(str(img_path))])
+            yield event.plain_result(f"―― 小结 ――\n{rule_summary(report)}")
+        else:
+            async for r in self._send_blocks(event, render_advisor_text(report)):
+                yield r
 
     @filter.command("燕云面板", alias={"yy面板"})
     async def yy_panel(self, event: AstrMessageEvent, identity: str = ""):
@@ -439,8 +538,79 @@ class YanyunQueryPlugin(Star):
     async def _fetch_rendered(self, role_id: str, kind: str, title: str) -> str:
         return "\n\n".join(await self._fetch_blocks(role_id, kind, title))
 
+    def _save_attrs_png(self, png: bytes, prefix: str = "attrs") -> Path | None:
+        """卡片图落盘到插件数据目录 images/,按前缀分类,各保留最新 10 张。"""
+        try:
+            d = Path(StarTools.get_data_dir(PLUGIN_NAME)) / "images"
+            d.mkdir(parents=True, exist_ok=True)
+            path = d / f"{prefix}_{int(time.time() * 1000)}.png"
+            path.write_bytes(png)
+            for old in sorted(d.glob(f"{prefix}_*.png"))[:-10]:
+                try:
+                    old.unlink()
+                except OSError:
+                    pass
+            return path
+        except Exception as e:
+            logger.warning(f"[燕云图片] 图片落盘失败: {e}")
+            return None
+
+    async def _render_attrs_image_file(self, proxy_data: dict, info_data: dict | None = None) -> Path | None:
+        """渲染属性一览图片(受 attrs_image 配置开关控制);失败/关闭返回 None。"""
+        if not bool(self.config.get("attrs_image", True)):
+            return None
+        try:
+            png = await render_attrs_image(
+                proxy_data,
+                info_data=info_data,
+                mirror=str(self.config.get("browser_download_mirror") or ""),
+                auto_install=bool(self.config.get("auto_install_browser", True)),
+            )
+        except Exception as e:
+            logger.warning(f"[燕云图片] 渲染异常,回退文本: {type(e).__name__}: {e}")
+            return None
+        if not png:
+            return None
+        return self._save_attrs_png(png)
+
+    async def _render_profile_image_file(self, proxy_data: dict, info_data: dict) -> Path | None:
+        """渲染「总览」合并卡(受 profile_image 配置开关控制);失败/关闭返回 None。"""
+        if not bool(self.config.get("profile_image", True)):
+            return None
+        try:
+            png = await render_combined_image(
+                proxy_data, info_data,
+                mirror=str(self.config.get("browser_download_mirror") or ""),
+                auto_install=bool(self.config.get("auto_install_browser", True)),
+            )
+        except Exception as e:
+            logger.warning(f"[燕云图片] 档案卡渲染异常,回退文本: {type(e).__name__}: {e}")
+            return None
+        if not png:
+            return None
+        return self._save_attrs_png(png, prefix="advisor")
+
+    async def _render_advisor_image_file(self, report: dict) -> Path | None:
+        """渲染养成分析图片(受 advisor_image 配置开关控制);失败/关闭返回 None。"""
+        if not bool(self.config.get("advisor_image", True)):
+            return None
+        try:
+            png = await render_advisor_image(
+                report,
+                mirror=str(self.config.get("browser_download_mirror") or ""),
+                auto_install=bool(self.config.get("auto_install_browser", True)),
+            )
+        except Exception as e:
+            logger.warning(f"[燕云图片] 养成分析渲染异常,回退文本: {type(e).__name__}: {e}")
+            return None
+        if not png:
+            return None
+        return self._save_attrs_png(png)
+
     async def _send_blocks(self, event: AstrMessageEvent, blocks: list[str]):
-        """QQ(aiocqhttp)平台发送合并转发卡片;其他平台或失败时回退纯文本。"""
+        """发送文本块:QQ(aiocqhttp)用合并转发卡片,其他平台纯文本。
+
+        仅作为图片卡发送失败时的兜底形式。"""
         norm = []
         for b in blocks:
             if isinstance(b, str):
@@ -471,7 +641,8 @@ class YanyunQueryPlugin(Star):
     async def _deliver_to_user(self, event: AstrMessageEvent, blocks: list[str]):
         """把完整内容主动发给用户:QQ 平台多块发合并转发卡片,单块发普通消息。
 
-        非 QQ 平台不发(LLM 回复会自然送达,避免重复);失败只记日志,不影响 LLM。
+        仅作为图片卡发送失败时的兜底形式。非 QQ 平台不发(LLM 回复会自然送达);
+        失败只记日志,不影响 LLM。
         """
         blocks = [b for b in blocks if b and b.strip()]
         if not blocks:
@@ -516,6 +687,32 @@ class YanyunQueryPlugin(Star):
             logger.error(f"[燕云查询] 未预期异常: {e}")
             return [f"[燕云查询] 内部错误:{type(e).__name__}"]
 
+    async def _send_profile(self, event: AstrMessageEvent, role_id: str):
+        """「燕云我的/燕云查询」主流程:档案卡图片优先,失败回退文本卡片。"""
+        try:
+            resp_info, resp_proxy = await asyncio.gather(
+                self.client.query_role_info(role_id),
+                self.client.query_proxy_role(role_id),
+            )
+        except TokenInvalidError as e:
+            yield event.plain_result(f"[燕云查询] {e}")
+            return
+        except DashenAPIError as e:
+            yield event.plain_result(f"[燕云查询] {e}")
+            return
+        except Exception as e:
+            logger.error(f"[燕云查询] 内部错误: {e}")
+            yield event.plain_result(f"[燕云查询] 内部错误:{type(e).__name__}")
+            return
+        img_path = await self._render_profile_image_file(resp_proxy.get("data") or {}, resp_info.get("data") or {})
+        if img_path is not None:
+            yield event.chain_result([Comp.Image.fromFileSystem(str(img_path))])
+            return
+        blocks = render_proxy_role(resp_proxy, f"燕云角色档案 · {role_id}",
+                                   info_data=resp_info.get("data") or {}, as_blocks=True)
+        async for r in self._send_blocks(event, blocks):
+            yield r
+
     @filter.command("燕云我的", alias={"yy我的"})
     async def yy_mine(self, event: AstrMessageEvent):
         bind = await self.store.get(event.get_sender_id())
@@ -523,7 +720,7 @@ class YanyunQueryPlugin(Star):
         if err:
             yield event.plain_result(err)
             return
-        async for r in self._send_blocks(event, await self._fetch_blocks(role_id, "proxy", f"燕云角色档案 · {role_id}")):
+        async for r in self._send_profile(event, role_id):
             yield r
 
     @filter.command("燕云查询", alias={"yy查询"})
@@ -537,7 +734,7 @@ class YanyunQueryPlugin(Star):
                 return
         else:
             role_id = identity
-        async for r in self._send_blocks(event, await self._fetch_blocks(role_id, "proxy", f"燕云角色档案 · {role_id}")):
+        async for r in self._send_profile(event, role_id):
             yield r
 
     @filter.command("燕云详情", alias={"yy详情"})
@@ -554,12 +751,17 @@ class YanyunQueryPlugin(Star):
                 self.client.query_role_info(identity),
                 self.client.query_proxy_role(identity),
             )
-            blocks = render_role_info(resp_info, f"燕云家园与日常 · {identity}", as_blocks=True)
-            attrs = _render_attrs(resp_proxy.get("data") or {}, as_blocks=True)
-            if attrs:
-                blocks.append(attrs)
-            async for r in self._send_blocks(event, blocks):
-                yield r
+            attrs_data = resp_proxy.get("data") or {}
+            img_path = await self._render_combined_image_file(attrs_data, resp_info.get("data") or {})
+            if img_path is None:
+                blocks = render_role_info(resp_info, f"燕云家园与日常 · {identity}", as_blocks=True)
+                attrs = _render_attrs(attrs_data, as_blocks=True)
+                if attrs:
+                    blocks.append(attrs)
+                async for r in self._send_blocks(event, blocks):
+                    yield r
+            if img_path is not None:
+                yield event.chain_result([Comp.Image.fromFileSystem(str(img_path))])
         except DashenAPIError as e:
             yield event.plain_result(f"[燕云查询] {e}")
         except Exception as e:
