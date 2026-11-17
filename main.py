@@ -174,6 +174,16 @@ class YanyunQueryPlugin(Star):
             return None, "该用户还没有绑定燕云角色,请引导其私聊发送「燕云扫码」完成登录绑定,或发送「燕云绑定 <角色编号>」"
         return bind.get("identity"), ""
 
+    @staticmethod
+    def _stop_after_delivery(event: AstrMessageEvent) -> str:
+        """图卡/文本已在工具内直接发送给用户时调用。
+
+        把本轮 Agent 标记为停止,避免大模型再拿工具返回值写一段总结;
+        同时返回空字符串,不再把数据回灌给模型。
+        """
+        event.set_extra("agent_stop_requested", True)
+        return ""
+
     @filter.llm_tool(name="yanyun_query_profile")
     async def yanyun_query_profile(self, event: AstrMessageEvent, role_id: str = "") -> str:
         """查询燕云十六声游戏角色的完整档案,包括等级、门派、功力、成就、外观收集、各区域探索度、区域收集(宝箱/蹊跷数量)、流派配置(套装、功法、心法、装备、奇术)。当用户想查看燕云十六声的角色数据、角色信息、探索度、流派、装备、心法等内容时调用此工具。
@@ -207,8 +217,8 @@ class YanyunQueryPlugin(Star):
                                    info_data=resp_info.get("data") or {}, as_blocks=True)
         if img_path is None:
             await self._deliver_to_user(event, blocks)
-        # 图片已发用户时数据仍回灌,供 LLM 对话
-        return "\n".join(blocks)[:900]
+        # 档案卡已直接送达用户,不再回灌数据给 LLM,避免追加总结
+        return self._stop_after_delivery(event)
 
     @filter.llm_tool(name="yanyun_query_detail")
     async def yanyun_query_detail(self, event: AstrMessageEvent, role_id: str = "") -> str:
@@ -239,11 +249,8 @@ class YanyunQueryPlugin(Star):
                 if attrs_text:
                     blocks.append(attrs_text)
                 await self._deliver_to_user(event, blocks)
-            # 图片成功=只发图片;LLM 摘要始终带上全部数据
-            summary = list(blocks)
-            if img_path is not None and attrs_text:
-                summary.append(attrs_text)
-            return "\n\n".join(summary)[:600]
+            # 图卡已直接送达用户,不再回灌数据给 LLM,避免追加总结
+            return self._stop_after_delivery(event)
         except DashenAPIError as e:
             return f"[燕云查询] {e}"
         except Exception as e:
@@ -261,7 +268,8 @@ class YanyunQueryPlugin(Star):
             return err
         blocks = await self._fetch_blocks(role_id, "pvp", f"燕云PVP · {role_id}")
         await self._deliver_to_user(event, blocks)
-        return "\n".join(blocks)[:600]
+        # PVP 图卡已直接送达用户,不再回灌数据给 LLM,避免追加总结
+        return self._stop_after_delivery(event)
 
     @filter.llm_tool(name="yanyun_analyze_build")
     async def yanyun_analyze_build(self, event: AstrMessageEvent, role_id: str = "") -> str:
