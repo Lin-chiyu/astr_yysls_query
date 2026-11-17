@@ -1,6 +1,6 @@
 /* 燕云凭据面板逻辑:bridge 调后端 API,轮询登录状态。
    主流程:扫码登录 → 后端拉角色列表(state=selecting)→ 点选角色 → 签发 token。
-   已填角色编号时走老路(扫码后直接签发该角色)。 */
+   已填角色名时走老路(扫码后直接签发该角色)。 */
 
 const $ = (id) => document.getElementById(id);
 const bridge = window.AstrBotPluginView || window.AstrBotPluginPage || null;
@@ -15,7 +15,7 @@ function showError(text) {
 function showResult(result, saved) {
   if (!result) return;
   $("result").classList.remove("hidden");
-  $("r-role").textContent = result.role_id || "";
+  $("r-role").textContent = result.nick || "";
   $("r-token").textContent = result.token || "";
   $("r-dts").textContent = result.dts || "";
   $("r-saved").textContent = saved
@@ -41,16 +41,16 @@ function renderRoles(roles) {
     const extra = [r.level ? `Lv.${r.level}` : "", r.server_name || ""]
       .filter(Boolean)
       .join(" · ");
-    btn.innerHTML = `<b>${r.nick || "(未命名)"}</b><span>${r.role_id}${extra ? "　" + extra : ""}</span>`;
-    btn.addEventListener("click", () => pick(r.role_id));
+    btn.innerHTML = `<b>${r.nick || "(未命名)"}</b><span>${extra}</span>`;
+    btn.addEventListener("click", () => pick(r.role_id, r.nick));
     box.appendChild(btn);
   });
 }
 
-async function pick(roleId) {
+async function pick(roleId, nick) {
   showError("");
   try {
-    setState(`正在为 ${roleId} 签发 token ...`);
+    setState(`正在为「${nick || "该角色"}」签发 token ...`);
     const r = await bridge.apiPost("login/issue", { role_id: roleId });
     if (!r || r.ok === false) {
       showError(r && r.message ? r.message : "签发失败");
@@ -108,7 +108,7 @@ async function start() {
   $("roles").classList.add("hidden");
   const roleId = $("role-id").value.trim();
   if (roleId && !/^\d{6,20}$/.test(roleId)) {
-    showError("角色编号应为 6~20 位纯数字;留空则扫码后再选角色");
+    showError("角色名 2~20 个字;留空则扫码后再选角色");
     return;
   }
   $("btn-start").disabled = true;

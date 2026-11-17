@@ -57,6 +57,7 @@ class Credential:
     token: str
     dts: str = "2026"
     uid: str = ""
+    nick: str = ""
     cookies: list[dict] = field(default_factory=list)
     enabled: bool = True
     _cooldown_until: float = field(default=0.0, repr=False)
@@ -94,6 +95,7 @@ class CredentialPool:
                     token=token,
                     dts=str(acc.get("dts") or "2026").strip(),
                     uid=uid,
+                    nick=str(acc.get("nick") or "").strip(),
                     cookies=uid_cookies.get(uid, []),
                     enabled=bool(acc.get("enabled", True)),
                 )
@@ -117,6 +119,20 @@ class CredentialPool:
             if c.role_id == str(role_id).strip() and c.enabled:
                 return c
         return None
+
+    def find_by_keyword(self, keyword: str) -> list[Credential]:
+        """按角色名模糊匹配(包含,忽略大小写);没填昵称时退回配置里的 name。"""
+        kw = (keyword or "").strip().lower()
+        if not kw:
+            return []
+        hits = []
+        for cred in self._creds:
+            if not cred.enabled:
+                continue
+            label = (cred.nick or cred.name or "").strip().lower()
+            if kw in label:
+                hits.append(cred)
+        return hits
 
     def role_ids(self) -> set[str]:
         """当前池里可用的角色编号集合(用于清理失效绑定)。"""

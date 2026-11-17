@@ -601,7 +601,6 @@ def _collect_profile(data: dict, info_data: dict | None) -> dict:
 
     p["nickname"] = str(g("base.nickname") or "").strip()
     p["level"] = g("base.level")
-    p["number_id"] = g("base.number_id")
     p["power"] = g("base.max_xiuwei_kungfu")
     p["fashion_score"] = g("fashion.score")
     school_id = g("base.school")
@@ -754,8 +753,6 @@ def _profile_sections(p: dict) -> list[str]:
     h: list[str] = []
     h.append(f'<div class="stats">{"".join(stats)}</div>')
     mut = []
-    if p.get("number_id"):
-        mut.append(f"编号 {esc(p['number_id'])}")
     if p.get("ach_detail"):
         mut.append(f"成就 {esc(p['ach_detail'])}")
     if p.get("create"):

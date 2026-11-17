@@ -104,7 +104,6 @@ def render_proxy_role(resp: dict[str, Any], title: str, info_data: dict | None =
 
     pairs = [
         ("base.level", "等级"),
-        ("base.number_id", "角色编号"),
         ("base.max_xiuwei_kungfu", "最高功力"),
         ("fashion.score", "时装收集分"),
     ]
