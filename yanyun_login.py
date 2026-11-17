@@ -446,6 +446,12 @@ class LoginService:
             self._qr_b64 = ""
 
             if role_id:
+                # 顺手补一下角色列表,回执里好显示昵称(失败不影响绑定)
+                if not self._roles and self._on_roles:
+                    try:
+                        self._roles = await self._on_roles(cookies) or []
+                    except Exception as e:
+                        logger.warning(f"[燕云查询] 读取角色列表(仅用于显示昵称)失败,忽略: {e}")
                 await self._finish_issue(role_id)
                 return
 
@@ -494,6 +500,11 @@ class LoginService:
         """签发 token 并回调落库(角色已确定时调用)。"""
         self._state, self._message = "issuing", f"正在为角色 {role_id} 签发 token ..."
         result = await self._issue_token(self._cookies, role_id)
+        # 回执里尽量显示角色昵称而不是冷冰冰的编号
+        for _r in self._roles:
+            if _r.get("role_id") == role_id:
+                result["nick"] = _r.get("nick") or ""
+                break
         self._result = result
         self._qr_b64 = ""
         if self._on_success:

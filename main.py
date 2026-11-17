@@ -557,7 +557,7 @@ class YanyunQueryPlugin(Star):
             yield event.plain_result(f"角色 {rid} 已有凭据,正在校验是否有效…")
             ok, reason = await self.client.verify_credential(rid)
             if ok:
-                yield event.plain_result(f"绑定成功!凭据有效,以后「燕云我的」查询的是:{rid}")
+                yield event.plain_result(f"绑定好了~ 以后查的就是角色 {rid} 了")
                 return
             if reason != "invalid":
                 yield event.plain_result(
@@ -983,10 +983,8 @@ class YanyunQueryPlugin(Star):
             yield event.plain_result(f"签发失败:{res.get('message')}")
             return
         await self.store.set(event.get_sender_id(), roles_picked["role_id"])
-        yield event.plain_result(
-            f"✓ 已绑定「{roles_picked.get('nick') or ''}」({roles_picked['role_id']}),"
-            f"现在可以发「燕云我的」查询了"
-        )
+        who = roles_picked.get("nick") or roles_picked["role_id"]
+        yield event.plain_result(f"登录好了~ 已经把你和「{who}」绑上。可以直接查看角色属性了")
 
     @staticmethod
     def _parse_choice(text: str, n: int) -> int | None:
@@ -1000,10 +998,8 @@ class YanyunQueryPlugin(Star):
     @staticmethod
     def _login_done_text(st: dict) -> str:
         r = st.get("result") or {}
-        return (
-            f"✓ 登录成功!角色 {r.get('role_id')}({r.get('dts')} 年度)已签发并绑定,\n"
-            "现在可以直接发「燕云我的」查询了"
-        )
+        who = r.get("nick") or r.get("role_id") or ""
+        return f"登录好了~ 已经把你和「{who}」绑上。可以直接查看角色属性了"
 
     async def _scan_notify(self, umo: str, qq: str):
         """扫码任务后台轮询:完成后推送结果并自动绑定。"""
@@ -1016,8 +1012,7 @@ class YanyunQueryPlugin(Star):
                 try:
                     await self.context.send_message(
                         umo, MessageChain().message(
-                            f"✓ 登录成功!角色 {result['role_id']}({result['dts']} 年度)已签发并绑定,\n"
-                            "现在可以直接发「燕云我的」查询了"
+                            self._login_done_text(st)
                         )
                     )
                 except Exception as e:
