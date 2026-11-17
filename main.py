@@ -321,7 +321,21 @@ class YanyunQueryPlugin(Star):
         except Exception as e:
             logger.error(f"[燕云查询] 内部错误: {e}")
         advisor_text = "\n".join(render_advisor_text(report))
-        return f"{advisor_text}\n\n―― 属性面板与全服基准 ――\n{panel_text}\n\n―― 你的分析素材(报告已发用户) ――\n{make_ai_prompt(report)}"[:3500]
+        # 关键段优先:分析素材与面板基准完整保留,超长时只截与图片重复的文本报告
+        MAX_CHARS = 5000
+        panel_block = f"\n\n―― 属性面板与全服基准 ――\n{panel_text}"
+        prompt_block = f"\n\n―― 你的分析素材(报告已发用户) ――\n{make_ai_prompt(report)}"
+        fixed_len = len(panel_block) + len(prompt_block)
+        if fixed_len >= MAX_CHARS:
+            panel_block = panel_block[: max(0, MAX_CHARS - len(prompt_block))]
+            payload = panel_block + prompt_block
+        else:
+            payload = advisor_text[: MAX_CHARS - fixed_len] + panel_block + prompt_block
+        logger.info(
+            f"[燕云分析] 素材 {len(payload)} 字符(advisor={len(advisor_text)} "
+            f"panel={len(panel_block)} prompt={len(prompt_block)} 上限={MAX_CHARS})"
+        )
+        return payload
 
     @filter.command("燕云分析", alias={"yy分析"})
     async def yy_analyze(self, event: AstrMessageEvent, identity: str = ""):
