@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>燕云凭据获取</title>
+<title>燕云登录绑定</title>
 <style>
   body { font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
          margin: 0; padding: 16px; background: #f5f6f8; color: #333; }
@@ -39,15 +39,15 @@
 </head>
 <body>
   <div class="card">
-    <h2>燕云十六声 · 一键获取凭据</h2>
+    <h2>燕云十六声 · 扫码登录</h2>
     <div class="desc">
       点击按钮后机器人会自动打开大神网页版并截取登录二维码,用<b>手机大神 App</b> 扫码登录,
-      登录成功后列出该账号下的燕云角色,点选要绑定的那个即自动签发年度 token 并写入插件配置。<br>
+      登录成功后列出该账号下的燕云角色,点选要绑定的那个就行,插件会自己记好。<br>
       角色留空即可(扫码后再选角色);也可以直接填角色名走老流程。
     </div>
     <div class="row">
       <input id="role-id" placeholder="可选:角色名,如 林迟羽">
-      <button id="btn-start">一键获取 token</button>
+      <button id="btn-start">开始扫码登录</button>
       <button id="btn-cancel" class="secondary">取消</button>
     </div>
     <div id="state" class="state">待机</div>
@@ -58,9 +58,9 @@
       二维码约 2 分钟有效,过期请点「取消」后重新获取</div>
     </div>
     <div id="result" class="result hidden">
-      <div class="ok">✓ 凭据获取成功</div>
+      <div class="ok">✓ 登录成功</div>
       <div>role_id: <span id="r-role"></span></div>
-      <div>token: <span id="r-token"></span></div>
+      <div>登录码: <span id="r-token"></span></div>
       <div>dts: <span id="r-dts"></span></div>
       <div id="r-saved"></div>
     </div>

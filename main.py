@@ -25,6 +25,7 @@ from .attrs_image import render_advisor_image, render_combined_image
 from .build_advisor import build_advisor, make_ai_prompt, render_text as render_advisor_text, rule_summary
 from .render import _render_attrs, render_generic, render_pvp, render_proxy_role, render_role_info
 from .storage import BindingStore
+from .wording import pick
 from .yanyun_login import LoginService, ensure_browser_ready
 
 try:  # AstrBot >= 4.27 提供的 web 辅助层
@@ -41,23 +42,27 @@ HELP_TEXT = """【燕云十六声查询】指令列表
 - 燕云绑定 <角色名>:把你自己的角色绑给这个 QQ(支持模糊匹配,重名会让你选)
 - 燕云解绑:解除绑定
 - 燕云我的:查询自己绑定的角色档案(角色名片图 + 探索度进度条)
-- 燕云查询 <角色名>:查询凭据池内的角色(同「燕云我的」卡片)
+- 燕云查询 <角色名>:查询已登录过的角色(同「燕云我的」卡片)
 - 燕云详情 <角色名>:家园日常 + 面板属性 + 区域收集(属性一览以图片发送,失败自动回退文本)
 - 燕云面板 <角色名>:调号助手数据(属性面板/流派/全服基准对比)
 - 燕云分析 <角色名>:流派养成对标报告(词条/战力对标 + 带部位的洗练方向,图片卡)
 - 燕云战绩 <角色名>:PVP 数据
-- 燕云状态:凭据自检(仅管理员)
+- 燕云状态:登录状态自检(仅管理员)
 - 燕云帮助:本说明
 
-凭据获取:私聊发「燕云登录」自助完成;管理员也可用 WebUI 面板或按 README 手动添加。
+登录绑定:私聊发「燕云登录」自助完成;管理员也可用 WebUI 面板或按 README 手动添加。
 自然语言:机器人配置了大模型后,直接说"看看我的燕云角色""查探索度"等也能触发查询。
 ⚠ 调用的是网易非公开接口,token 年度有效,仅供学习交流。"""
 
 
 @register("astrbot_plugin_yanyun_query", "林迟羽", "燕云十六声角色查询(角色档案/探索度/流派配置/面板属性)", "v1.0.0")
 class YanyunQueryPlugin(Star):
+    # 用户被问过「要绑定哪个角色」之后的 5 分钟内,下一句话即使不提燕云也允许绑定
+    _BIND_PENDING_TTL = 300
+
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
+        self._bind_pending: dict[str, float] = {}
         self.config = config
         self.store = BindingStore(Path(StarTools.get_data_dir(PLUGIN_NAME)))
         self._build_client()
@@ -264,22 +269,19 @@ class YanyunQueryPlugin(Star):
             own = str((bind or {}).get("identity") or "").strip()
             cred = self.client._pool.by_role(own) if own else None
             if cred is None:
-                return None, "你还没绑定角色。先私聊发「燕云登录」扫码登录,把自己绑上。"
+                return None, pick("role_not_bound")
             return cred, ""
         if text_in.isdigit():
             cred = self.client._pool.by_role(text_in)
             if cred is None:
-                return None, "这个角色还没有登录凭据。先私聊发「燕云登录」把你自己的角色加进来。"
+                return None, pick("role_not_ready")
             return cred, ""
         hits = self.client._pool.find_by_keyword(text_in)
         if not hits:
-            return None, (
-                f"没找到叫「{text_in}」的角色。我只能查到我自己账号下的角色,查不了别人的。\n"
-                "如果这是你自己的号,先私聊发「燕云登录」扫码登录,把角色加进来。"
-            )
+            return None, pick("role_not_found", name=text_in)
         if len(hits) == 1:
             return hits[0], ""
-        lines = [f"和「{text_in}」相关的角色有 {len(hits)} 个,你要{purpose}哪个?回复序号:"]
+        lines = [pick("role_choose_multi", name=text_in, n=len(hits), purpose=purpose)]
         for i, cred in enumerate(hits, 1):
             lines.append(f"{i}. {self._role_label(cred)}")
         await event.send(event.plain_result("\n".join(lines)))
@@ -298,10 +300,10 @@ class YanyunQueryPlugin(Star):
         try:
             await waiter(event)
         except TimeoutError:
-            return None, "等太久没选,先不处理了。要的话重新发一次。"
+            return None, pick("role_choose_timeout")
         except Exception as e:
             logger.error(f"[燕云查询] 选择角色失败: {e}")
-            return None, "选角色的时候出了点问题,重发一次试试。"
+            return None, pick("role_choose_error")
         if not picked:
             return None, ""
         return hits[picked[0] - 1], ""
@@ -318,10 +320,7 @@ class YanyunQueryPlugin(Star):
         if cred.role_id != own:
             mine = self.client._pool.by_role(own)
             mine_label = self._role_label(mine) if mine else "你绑定的角色"
-            return "", (
-                f"「{self._role_label(cred)}」不是你绑定的角色。\n"
-                f"你绑定的是「{mine_label}」,只能查自己的角色。"
-            )
+            return "", pick("role_not_mine", name=self._role_label(cred), mine=mine_label)
         return cred.role_id, ""
 
     async def _backfill_nicks(self) -> None:
@@ -497,20 +496,18 @@ class YanyunQueryPlugin(Star):
             logger.info(f"[燕云分析] 面板/基准数据跳过: {e}")
         except Exception as e:
             logger.error(f"[燕云查询] 内部错误: {e}")
-        advisor_text = "\n".join(render_advisor_text(report))
-        # 关键段优先:分析素材与面板基准完整保留,超长时只截与图片重复的文本报告
+        # 图卡已经把完整报告发给用户了,这里不再重复塞一遍(省约 1500 字符)
         MAX_CHARS = 5000
         panel_block = f"\n\n―― 属性面板与全服基准 ――\n{panel_text}"
         prompt_block = f"\n\n―― 你的分析素材(报告已发用户) ――\n{make_ai_prompt(report)}"
-        fixed_len = len(panel_block) + len(prompt_block)
-        if fixed_len >= MAX_CHARS:
-            panel_block = panel_block[: max(0, MAX_CHARS - len(prompt_block))]
-            payload = panel_block + prompt_block
+        if len(panel_block) + len(prompt_block) >= MAX_CHARS:
+            # 极端情况:优先保证分析素材完整,面板段截断
+            payload = panel_block[: max(0, MAX_CHARS - len(prompt_block))] + prompt_block
         else:
-            payload = advisor_text[: MAX_CHARS - fixed_len] + panel_block + prompt_block
+            payload = panel_block + prompt_block
         logger.info(
-            f"[燕云分析] 素材 {len(payload)} 字符(advisor={len(advisor_text)} "
-            f"panel={len(panel_block)} prompt={len(prompt_block)} 上限={MAX_CHARS})"
+            f"[燕云分析] 素材 {len(payload)} 字符(panel={len(panel_block)} "
+            f"prompt={len(prompt_block)} 上限={MAX_CHARS})"
         )
         return payload
 
@@ -612,47 +609,104 @@ class YanyunQueryPlugin(Star):
 
     # ------------------------------------------------------------------ 绑定
 
-    @filter.command("燕云绑定", alias={"yy绑定"})
-    async def yy_bind(self, event: AstrMessageEvent, identity: str = ""):
-        if not identity:
-            yield event.plain_result("要绑定哪个角色?把角色名回给我就行(例如:燕云绑定 林迟羽):")
+    @filter.regex(r"^(?:燕云绑定|yy绑定)")
+    async def yy_bind(self, event: AstrMessageEvent):
+        """绑定:带不带空格都认,例如「燕云绑定 林迟羽」「燕云绑定林迟羽」「燕云绑定<林迟羽>」。"""
+        text = event.get_message_str().strip()
+        tail = re.sub(r"^(?:燕云绑定|yy绑定)", "", text).strip()
+        tail = tail.strip("<>【】").strip()
+        if not tail:
+            yield event.plain_result(pick("bind_need_name"))
             identity = ""
 
             @session_waiter(timeout=60, record_history_chains=False)
             async def waiter(controller: SessionController, ev: AstrMessageEvent):
                 nonlocal identity
-                text = ev.message_str.strip()
-                if not text:
+                t = ev.message_str.strip()
+                if not t:
                     return  # 空消息安静忽略,不刷提示
-                identity = text
+                identity = t
                 controller.stop()
 
             try:
                 await waiter(event)
             except TimeoutError:
-                yield event.plain_result("绑定超时,下次直接发:燕云绑定 <角色名>")
+                yield event.plain_result(pick("bind_timeout"))
                 return
             except Exception as e:
                 logger.error(f"[燕云查询] 绑定交互异常: {e}")
                 return
             if not identity:
                 return
-
-        async for r in self._do_bind(event, identity):
+            tail = identity
+        logger.info(f"[燕云查询] 绑定指令:{text!r} -> 角色名 {tail!r}")
+        async for r in self._do_bind(event, tail):
             yield r
 
-    @filter.regex(r"^(?:燕云绑定|yy绑定)(?![ \t])\S+")
-    async def yy_bind_loose(self, event: AstrMessageEvent):
-        """兜底:兼容「燕云绑定林迟羽」「燕云绑定<林迟羽>」等不带空格的写法。"""
-        text = event.get_message_str().strip()
-        logger.info(f"[燕云查询] 兜底匹配绑定指令:{text!r}")
-        async for r in self._do_bind(event, text):
-            yield r
+    def _bind_waiting(self, uid: str) -> bool:
+        """这个用户是不是刚被问过要绑定哪个角色。"""
+        pending = getattr(self, "_bind_pending", None) or {}
+        return pending.get(uid, 0.0) > time.time() - self._BIND_PENDING_TTL
+
+    def _mark_bind_waiting(self, uid: str, on: bool = True) -> None:
+        pending = getattr(self, "_bind_pending", None)
+        if pending is None:
+            pending = self._bind_pending = {}
+        if on:
+            pending[uid] = time.time()
+        else:
+            pending.pop(uid, None)
+
+    @staticmethod
+    def _mentions_yanyun(text: str) -> bool:
+        """这句话是不是在说燕云十六声。
+
+        认这些说法:「燕云」「燕子」「十六声」「yanyun」「yysls」「h72」。
+        """
+        t = (text or "").strip().lower()
+        return any(k in t for k in ("燕云", "燕子", "十六声", "yanyun", "yysls", "h72"))
+
+    @filter.llm_tool(name="yanyun_bind")
+    async def yanyun_bind(self, event: AstrMessageEvent, keyword: str = ""):
+        """把用户自己的《燕云十六声》角色绑定到这个 QQ 号上。
+
+        只有同时满足两点才调用:
+        1. 用户这句话明确在说《燕云十六声》——出现「燕云」「燕子」「燕」这类词;
+        2. 用户要求绑定/关联自己的燕云角色。
+
+        如果上一条你已经问过用户「要绑定哪个角色」,用户现在的回复就是在报名
+        (例如「绑林迟羽哒」),这种情况也要调用。
+
+        如果用户说的是别的游戏、别的游戏角色、或者只是开玩笑/比喻
+        (例如「请把我跟许嵩绑定死」「把我和这个游戏绑定」),一律不要调用。
+
+        Args:
+            keyword(string): 用户说的燕云角色名,例如「林迟羽哒」;用户没说名字就传空字符串
+        """
+        uid = event.get_sender_id()
+        waiting = self._bind_waiting(uid)
+        if not waiting and not self._mentions_yanyun(event.get_message_str()):
+            # 模型误调:什么都不做,让它按普通聊天回复
+            return "[用户这句话和《燕云十六声》无关,不要执行绑定,按普通聊天回复即可]"
+        if waiting:
+            self._mark_bind_waiting(uid, False)
+        async for result in self._do_bind(event, keyword):
+            await event.send(result)
+        # 绑定结果已经直接发给用户了,别再让模型复述一遍
+        event.set_extra("agent_stop_requested", True)
+        return "[已经直接把回复发给用户了,本轮不需要再用文字复述]"
 
     async def _do_bind(self, event: AstrMessageEvent, raw: str):
         """绑定:按角色名找到角色 → 记下绑定 → 校验登录凭据,失效才走扫码。"""
         keyword = re.sub(r"^(?:燕云绑定|yy绑定)", "", (raw or "").strip()).strip()
         keyword = keyword.strip("<>【】").strip()
+        if not keyword:
+            bind = await self.store.get(event.get_sender_id())
+            if not str((bind or {}).get("identity") or "").strip():
+                # 既没说角色名、也还没绑定过:问一句,并放行下一句话
+                self._mark_bind_waiting(event.get_sender_id())
+                yield event.plain_result(pick("bind_need_name"))
+                return
         cred, err = await self._choose_role(event, keyword, "绑定")
         if err:
             yield event.plain_result(err)
@@ -666,29 +720,22 @@ class YanyunQueryPlugin(Star):
         is_group = bool(event.get_group_id())
         await self.store.set(user_id, rid, {"nick": cred.nick})
 
-        yield event.plain_result(f"「{label}」已有登录凭据,正在校验是否有效…")
+        yield event.plain_result(pick("bind_probe", name=label))
         ok, reason = await self.client.verify_credential(rid)
         if ok:
-            yield event.plain_result(f"绑定好了~ 以后查的就是「{label}」了")
+            yield event.plain_result(pick("bind_ok", name=label))
             return
         if reason != "invalid":
-            yield event.plain_result(
-                f"已经记下「{label}」的绑定,不过凭据自检出了点问题,先按可用处理。\n"
-                "如果查询报错,发「燕云登录」重新登录一下就行。"
-            )
+            yield event.plain_result(pick("bind_odd", name=label))
             return
         if is_group:
-            yield event.plain_result(
-                f"「{label}」的登录过期了。群聊里没法扫码,私聊我发「燕云登录」重新登录一下就行。"
-            )
+            yield event.plain_result(pick("bind_group_expired", name=label))
             return
 
-        yield event.plain_result(f"「{label}」的登录过期了,正在为你重新扫码登录…")
+        yield event.plain_result(pick("bind_rescan", name=label))
         started = await self.login_svc.start(rid)
         if not started.get("started"):
-            yield event.plain_result(
-                f"自动扫码启动失败:{started.get('message')}\n直接私聊发「燕云登录」扫码也行。"
-            )
+            yield event.plain_result(pick("bind_scan_fail", msg=started.get("message")))
             return
         qr_path = Path(StarTools.get_data_dir(PLUGIN_NAME)) / "login_qr_tmp.png"
         for _ in range(100):
@@ -702,7 +749,7 @@ class YanyunQueryPlugin(Star):
                 ])
                 break
             if st["state"] in ("failed", "timeout"):
-                yield event.plain_result(f"扫码流程失败:{st['message']}")
+                yield event.plain_result(pick("login_flow_fail", msg=st["message"]))
                 return
         else:
             st = self.login_svc.status()
@@ -715,7 +762,7 @@ class YanyunQueryPlugin(Star):
     @filter.command("燕云解绑", alias={"yy解绑"})
     async def yy_unbind(self, event: AstrMessageEvent):
         ok = await self.store.remove(event.get_sender_id())
-        yield event.plain_result("已解绑。" if ok else "你还没有绑定角色,先发「燕云绑定 <角色名>」")
+        yield event.plain_result(pick("bind_unbind_ok") if ok else pick("bind_unbind_none"))
 
     # ------------------------------------------------------------------ 查询
 
@@ -949,13 +996,13 @@ class YanyunQueryPlugin(Star):
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("燕云状态", alias={"yy状态"})
     async def yy_status(self, event: AstrMessageEvent):
-        yield event.plain_result(f"【凭据池】\n{self.client._pool.describe()}\n\n正在自检……")
+        yield event.plain_result(f"【已登录角色】\n{self.client._pool.describe()}\n\n正在逐个试能不能用……")
         try:
             results = await self.client.health_check()
         except DashenAPIError as e:
             yield event.plain_result(f"[燕云查询] {e}")
             return
-        yield event.plain_result("【自检结果】\n" + "\n".join(results))
+        yield event.plain_result("【检查结果】\n" + "\n".join(results))
 
     # ------------------------------------------------------------------ 自助登录
 
@@ -963,12 +1010,12 @@ class YanyunQueryPlugin(Star):
     async def yy_login(self, event: AstrMessageEvent):
         """私聊自助登录:扫码 → 选角色 → 签发 token + 写配置 + 绑定。"""
         if event.get_group_id():
-            yield event.plain_result("登录涉及个人账号,请私聊我使用「燕云登录」")
+            yield event.plain_result(pick("login_group_only"))
             return
 
         started = await self.login_svc.start()
         if not started.get("started"):
-            yield event.plain_result(f"启动失败:{started.get('message')}")
+            yield event.plain_result(pick("login_start_fail", msg=started.get("message")))
             return
 
         # 1) 等二维码就绪并发出
@@ -987,11 +1034,11 @@ class YanyunQueryPlugin(Star):
                 ])
                 break
             if st["state"] in ("failed", "timeout"):
-                yield event.plain_result(f"登录流程失败:{st['message']}")
+                yield event.plain_result(pick("login_flow_fail", msg=st["message"]))
                 return
         else:
             await self.login_svc.cancel()
-            yield event.plain_result("二维码生成超时,请重新发「燕云登录」")
+            yield event.plain_result(pick("login_qr_timeout"))
             return
 
         # 2) 等扫码结果:selecting 需要选角色;done 单角色已自动签发
@@ -1011,27 +1058,26 @@ class YanyunQueryPlugin(Star):
                 yield event.plain_result(self._login_done_text(st))
                 return
             if st["state"] in ("failed", "timeout"):
-                yield event.plain_result(f"登录失败:{st['message']}")
+                yield event.plain_result(pick("login_fail", msg=st["message"]))
                 return
         else:
             await self.login_svc.cancel()
-            yield event.plain_result("等待扫码超时,请重新发「燕云登录」")
+            yield event.plain_result(pick("login_scan_timeout"))
             return
 
         if not roles:
             await self.login_svc.cancel()
-            yield event.plain_result("没读到角色列表,请重新发「燕云登录」")
+            yield event.plain_result(pick("login_no_roles"))
             return
 
         # 3) 列角色,等用户回复序号
-        lines = [f"检测到你账号下有 {len(roles)} 个燕云角色:"]
+        lines = [pick("login_roles_intro", n=len(roles))]
         for i, r in enumerate(roles, 1):
             extra = " · ".join(
                 x for x in (f"Lv.{r.get('level')}" if r.get("level") else "", r.get("server_name") or "") if x
             )
             lines.append(f"{i}. {r.get('nick') or '(未命名)'}" + (f"　{extra}" if extra else ""))
         lines.append("")
-        lines.append(f"回复序号绑定(60 秒内,1~{len(roles)})")
         yield event.plain_result("\n".join(lines))
 
         roles_picked: dict | None = None
@@ -1051,7 +1097,7 @@ class YanyunQueryPlugin(Star):
                 await waiter(event)
             except TimeoutError:
                 await self.login_svc.cancel()
-                yield event.plain_result("超时了,重新发「燕云登录」再来")
+                yield event.plain_result(pick("login_choice_timeout"))
                 return
             except Exception as e:
                 logger.error(f"[燕云查询] 选择角色交互异常: {e}")
@@ -1061,10 +1107,10 @@ class YanyunQueryPlugin(Star):
             idx = self._parse_choice(choice, len(roles))
             if idx is None:
                 if attempt == 0:
-                    yield event.plain_result(f"序号不对哦,请回 1~{len(roles)} 之间的数字(还能再试一次)")
+                    yield event.plain_result(pick("login_choice_bad", hi=len(roles)))
                     continue
                 await self.login_svc.cancel()
-                yield event.plain_result("没选对,已取消本次登录,重新发「燕云登录」再来")
+                yield event.plain_result(pick("login_choice_cancel"))
                 return
             roles_picked = roles[idx]
             break
@@ -1073,10 +1119,12 @@ class YanyunQueryPlugin(Star):
             return
 
         # 4) 签发 + 绑定
-        yield event.plain_result(f"正在为「{roles_picked.get('nick') or roles_picked['role_id']}」签发凭据…")
+        yield event.plain_result(
+            pick("login_issuing", name=roles_picked.get("nick") or roles_picked["role_id"])
+        )
         res = await self.login_svc.issue_for(roles_picked["role_id"])
         if not res.get("ok"):
-            yield event.plain_result(f"签发失败:{res.get('message')}")
+            yield event.plain_result(pick("login_fail", msg=res.get("message")))
             return
         await self.store.set(
             event.get_sender_id(),
@@ -1084,7 +1132,7 @@ class YanyunQueryPlugin(Star):
             {"nick": roles_picked.get("nick") or ""},
         )
         who = roles_picked.get("nick") or roles_picked["role_id"]
-        yield event.plain_result(f"登录好了~ 已经把你和「{who}」绑上。可以直接查看角色属性了")
+        yield event.plain_result(pick("login_ok", name=who))
 
     @staticmethod
     def _parse_choice(text: str, n: int) -> int | None:
@@ -1099,7 +1147,7 @@ class YanyunQueryPlugin(Star):
     def _login_done_text(st: dict) -> str:
         r = st.get("result") or {}
         who = r.get("nick") or r.get("role_id") or ""
-        return f"登录好了~ 已经把你和「{who}」绑上。可以直接查看角色属性了"
+        return pick("login_ok", name=who)
 
     async def _scan_notify(self, umo: str, qq: str):
         """扫码任务后台轮询:完成后推送结果并自动绑定。"""

@@ -50,7 +50,7 @@ function renderRoles(roles) {
 async function pick(roleId, nick) {
   showError("");
   try {
-    setState(`正在为「${nick || "该角色"}」签发 token ...`);
+    setState(`正在给「${nick || "该角色"}」办登录 ...`);
     const r = await bridge.apiPost("login/issue", { role_id: roleId });
     if (!r || r.ok === false) {
       showError(r && r.message ? r.message : "签发失败");
