@@ -1,4 +1,6 @@
-/* 燕云凭据面板逻辑:bridge 调后端 API,轮询登录状态。 */
+/* 燕云凭据面板逻辑:bridge 调后端 API,轮询登录状态。
+   主流程:扫码登录 → 后端拉角色列表(state=selecting)→ 点选角色 → 签发 token。
+   已填角色编号时走老路(扫码后直接签发该角色)。 */
 
 const $ = (id) => document.getElementById(id);
 const bridge = window.AstrBotPluginView || window.AstrBotPluginPage || null;
@@ -21,8 +23,53 @@ function showResult(result, saved) {
     : "⚠ 未能自动写入配置,请将上面 token 手动填入插件配置";
 }
 
+function renderRoles(roles) {
+  const box = $("roles");
+  box.innerHTML = "";
+  if (!roles || !roles.length) {
+    box.classList.add("hidden");
+    return;
+  }
+  box.classList.remove("hidden");
+  const tip = document.createElement("div");
+  tip.className = "tip";
+  tip.textContent = `检测到 ${roles.length} 个燕云角色,点击要绑定的那个:`;
+  box.appendChild(tip);
+  roles.forEach((r) => {
+    const btn = document.createElement("button");
+    btn.className = "role-btn";
+    const extra = [r.level ? `Lv.${r.level}` : "", r.server_name || ""]
+      .filter(Boolean)
+      .join(" · ");
+    btn.innerHTML = `<b>${r.nick || "(未命名)"}</b><span>${r.role_id}${extra ? "　" + extra : ""}</span>`;
+    btn.addEventListener("click", () => pick(r.role_id));
+    box.appendChild(btn);
+  });
+}
+
+async function pick(roleId) {
+  showError("");
+  try {
+    setState(`正在为 ${roleId} 签发 token ...`);
+    const r = await bridge.apiPost("login/issue", { role_id: roleId });
+    if (!r || r.ok === false) {
+      showError(r && r.message ? r.message : "签发失败");
+      return;
+    }
+    $("roles").classList.add("hidden");
+    stopPolling();
+    showResult(r.result, r.saved);
+    $("btn-start").disabled = false;
+  } catch (e) {
+    showError("签发失败:" + (e && e.message ? e.message : e));
+  }
+}
+
 function stopPolling() {
-  if (timer) { clearInterval(timer); timer = null; }
+  if (timer) {
+    clearInterval(timer);
+    timer = null;
+  }
 }
 
 async function poll() {
@@ -35,12 +82,16 @@ async function poll() {
     } else {
       $("qr-wrap").classList.add("hidden");
     }
-    if (st.state === "done") {
+    if (st.state === "selecting") {
+      renderRoles(st.roles);
+    } else if (st.state === "done") {
       stopPolling();
+      $("roles").classList.add("hidden");
       showResult(st.result, st.saved);
       $("btn-start").disabled = false;
     } else if (st.state === "failed" || st.state === "timeout") {
       stopPolling();
+      $("roles").classList.add("hidden");
       showError(`登录流程失败:${st.message}`);
       $("btn-start").disabled = false;
     } else if (st.state === "issuing") {
@@ -54,14 +105,15 @@ async function poll() {
 async function start() {
   showError("");
   $("result").classList.add("hidden");
+  $("roles").classList.add("hidden");
   const roleId = $("role-id").value.trim();
-  if (!/^\d{6,20}$/.test(roleId)) {
-    showError("请先填写正确的燕云角色编号(纯数字),可在游戏内个人信息页查看");
+  if (roleId && !/^\d{6,20}$/.test(roleId)) {
+    showError("角色编号应为 6~20 位纯数字;留空则扫码后再选角色");
     return;
   }
   $("btn-start").disabled = true;
   try {
-    const r = await bridge.apiPost("login/start", { role_id: roleId });
+    const r = await bridge.apiPost("login/start", roleId ? { role_id: roleId } : {});
     if (!r || r.started === false) {
       showError(r && r.message ? r.message : "启动失败");
       $("btn-start").disabled = false;
@@ -78,10 +130,13 @@ async function start() {
 }
 
 async function cancel() {
-  try { await bridge.apiPost("login/cancel", {}); } catch {}
+  try {
+    await bridge.apiPost("login/cancel", {});
+  } catch {}
   stopPolling();
   $("btn-start").disabled = false;
   $("qr-wrap").classList.add("hidden");
+  $("roles").classList.add("hidden");
   setState("已取消");
 }
 

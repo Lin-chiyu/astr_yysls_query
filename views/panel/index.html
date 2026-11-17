@@ -24,6 +24,12 @@
   .qr-wrap { text-align: center; margin-top: 12px; }
   .qr-wrap img { width: 280px; border: 1px solid #eee; border-radius: 8px; background: #fff; }
   .tip { color: #999; font-size: 12px; margin-top: 8px; line-height: 1.6; }
+  .roles { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .role-btn { display: flex; justify-content: space-between; align-items: center; gap: 12px;
+              text-align: left; background: #fff5f5; color: #333; border: 1px solid #f0c9c9;
+              border-radius: 8px; padding: 10px 14px; font-size: 14px; }
+  .role-btn:hover { background: #ffecec; border-color: #e34d4d; }
+  .role-btn span { color: #888; font-size: 12px; }
   .result { margin-top: 12px; padding: 12px; background: #f0f9eb; border-radius: 8px;
             font-size: 13px; line-height: 1.8; word-break: break-all; }
   .result .ok { color: #67c23a; font-weight: 600; }
@@ -36,15 +42,16 @@
     <h2>燕云十六声 · 一键获取凭据</h2>
     <div class="desc">
       点击按钮后机器人会自动打开大神网页版并截取登录二维码,用<b>手机大神 App</b> 扫码登录,
-      登录成功后自动签发年度 token 并写入插件配置。token 与角色绑定,如需查询多个角色,
-      请分别用对应账号的大神扫码获取。
+      登录成功后列出该账号下的燕云角色,点选要绑定的那个即自动签发年度 token 并写入插件配置。<br>
+      角色编号留空即可(扫码后再选角色);已知编号时也可直接填入走老流程。
     </div>
     <div class="row">
-      <input id="role-id" placeholder="燕云角色编号,如 0488796812">
+      <input id="role-id" placeholder="可选:燕云角色编号,如 0488796812">
       <button id="btn-start">一键获取 token</button>
       <button id="btn-cancel" class="secondary">取消</button>
     </div>
     <div id="state" class="state">待机</div>
+    <div id="roles" class="roles hidden"></div>
     <div id="qr-wrap" class="qr-wrap hidden">
       <img id="qr" alt="登录二维码">
       <div class="tip">请用手机「大神 App」→ 首页右上角扫一扫,扫码登录<br>

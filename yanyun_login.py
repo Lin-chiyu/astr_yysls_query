@@ -240,12 +240,20 @@ def qr_png_to_ascii(png_bytes: bytes, width: int = 56) -> str:
 
 
 class LoginService:
-    """扫码登录 + token 签发状态机(单任务)。"""
+    """扫码登录 + token 签发状态机(单任务)。
+
+    两种模式:
+      - start(role_id) : 角色已知(凭据失效续期),扫码成功后直接签发。
+      - start()        : 角色未知(群友首次登录),扫码成功后回调 on_roles
+                         取该账号下的燕云角色,交由调用方选择后再
+                         issue_for(role_id) 签发。
+    """
 
     def __init__(
         self,
         server: str = "1",
         on_success: Callable[[dict, list[dict]], Any] | None = None,
+        on_roles: Callable[[list[dict]], Any] | None = None,
         mirror: str = "",
         auto_install: bool = True,
     ):
@@ -253,11 +261,14 @@ class LoginService:
         self._mirror = mirror
         self._auto_install = auto_install
         self._on_success = on_success  # 回调签名:(result, cookies)
+        self._on_roles = on_roles  # 回调签名:(cookies) -> list[dict]
         self._state = "idle"
         self._message = "待机"
         self._qr_b64 = ""
         self._result: dict | None = None
         self._saved = False
+        self._roles: list[dict] = []
+        self._cookies: list[dict] = []
         self._task: asyncio.Task | None = None
         self._browser_lock = asyncio.Lock()
         self._pw = None
@@ -272,29 +283,50 @@ class LoginService:
             "qr_b64": self._qr_b64,
             "result": self._result,
             "saved": self._saved,
+            "roles": self._roles,
         }
 
-    async def start(self, role_id: str) -> dict:
+    async def start(self, role_id: str | None = None) -> dict:
         if not PLAYWRIGHT_OK:
             return {"started": False, "message": "未安装 playwright,请先 pip install playwright && playwright install chromium"}
         if self._task and not self._task.done():
             return {"started": False, "message": "已有登录任务进行中,请先取消或等待完成"}
-        if not role_id:
-            return {"started": False, "message": "缺少 role_id"}
+        role_id = (role_id or "").strip()
         self._reset(role_id)
         self._task = asyncio.create_task(self._run(role_id))
         return {"started": True, "message": "已启动"}
 
+    async def issue_for(self, role_id: str) -> dict:
+        """用本次扫码的登录态给指定角色签发 token(角色选择后调用)。"""
+        role_id = str(role_id or "").strip()
+        if not self._cookies:
+            return {"ok": False, "message": "登录态已失效,请重新发「燕云登录」"}
+        if self._roles and role_id not in {r["role_id"] for r in self._roles}:
+            return {"ok": False, "message": f"角色 {role_id} 不在本次登录的账号里,请重新选择"}
+        if not role_id:
+            return {"ok": False, "message": "缺少角色编号"}
+        try:
+            await self._finish_issue(role_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"[燕云查询] 签发失败(角色 {role_id}): {e}")
+            self._state, self._message = "failed", f"签发失败:{e}"
+        return {"ok": self._state == "done", "message": self._message, "result": self._result}
+
     async def cancel(self) -> dict:
-        if self._task and not self._task.done():
+        had_task = bool(self._task and not self._task.done())
+        if had_task:
             self._task.cancel()
             try:
                 await self._task
             except (asyncio.CancelledError, Exception):
                 pass
-            self._state, self._message = "idle", "已取消"
-            return {"cancelled": True}
-        return {"cancelled": False, "message": "没有进行中的任务"}
+        # 无论任务是否已结束都清掉登录态与待选角色,避免旧 cookie 被继续使用
+        self._state, self._message = "idle", "已取消"
+        self._roles, self._cookies = [], []
+        self._qr_b64 = ""
+        return {"cancelled": had_task}
 
     async def close(self):
         if self._task and not self._task.done():
@@ -317,10 +349,15 @@ class LoginService:
     # ------------------------------------------------------------------ 内部
 
     def _reset(self, role_id: str):
-        self._state, self._message = "starting", f"正在打开登录页(角色 {role_id})..."
+        if role_id:
+            self._state, self._message = "starting", f"正在打开登录页(角色 {role_id})..."
+        else:
+            self._state, self._message = "starting", "正在打开登录页..."
         self._qr_b64 = ""
         self._result = None
         self._saved = False
+        self._roles = []
+        self._cookies = []
 
     async def _ensure_browser(self):
         """返回可用 browser;环境缺失时自动安装(进度写入 state.message,面板可见)。"""
@@ -346,7 +383,7 @@ class LoginService:
             logger.info(f"[燕云查询] 浏览器就绪({msg})")
             return self._browser
 
-    async def _run(self, role_id: str):
+    async def _run(self, role_id: str | None):
         context = None
         try:
             browser = await self._ensure_browser()
@@ -402,27 +439,34 @@ class LoginService:
             if not cookies:
                 self._state, self._message = "timeout", "扫码超时,请重新获取"
                 return
-            logger.info(f"[燕云查询] 登录成功,共 {len(cookies)} 条 cookie,开始签发 token ...")
+            logger.info(f"[燕云查询] 登录成功,共 {len(cookies)} 条 cookie")
             await context.close()
             context = None
+            self._cookies = cookies
+            self._qr_b64 = ""
 
-            # 纯 HTTP 签发
-            self._state, self._message = "issuing", "登录成功,正在签发 token ..."
-            result = await self._issue_token(cookies, role_id)
-            self._result = result
-            if self._on_success:
-                try:
-                    await self._on_success(result, cookies)
-                    self._saved = True
-                    self._message = f"token 已写入插件配置(角色 {result['role_id']}),登录 cookie 已保存"
-                except Exception as e:
-                    self._message = f"token 签发成功但写入配置失败: {e};请手动填入 token={result['token']}"
-                self._state = "done"
-            else:
-                self._saved = False
-                self._message = f"token 签发成功: {result['token']}"
-                self._state = "done"
-            logger.info(f"[燕云查询] 签发完成: {self._message}")
+            if role_id:
+                await self._finish_issue(role_id)
+                return
+
+            # 角色未知:拉取该账号下的燕云角色,交给调用方选择后再 issue_for
+            self._state, self._message = "issuing", "登录成功,正在读取账号下的燕云角色..."
+            try:
+                roles = await self._on_roles(cookies) if self._on_roles else []
+            except Exception as e:
+                logger.error(f"[燕云查询] 读取角色列表失败: {e}")
+                self._state, self._message = "failed", f"读取角色列表失败:{e}"
+                return
+            self._roles = roles or []
+            if not self._roles:
+                self._state = "failed"
+                self._message = "登录成功,但这个账号下没有燕云角色,请先在游戏里创建角色后再试"
+                return
+            if len(self._roles) == 1:
+                await self._finish_issue(self._roles[0]["role_id"])
+                return
+            self._state = "selecting"
+            self._message = f"检测到 {len(self._roles)} 个燕云角色,请选择要绑定的角色"
         except asyncio.CancelledError:
             self._state, self._message = "idle", "已取消"
             raise
@@ -445,6 +489,26 @@ class LoginService:
         buf = io.BytesIO()
         crop.save(buf, format="PNG")
         return buf.getvalue()
+
+    async def _finish_issue(self, role_id: str):
+        """签发 token 并回调落库(角色已确定时调用)。"""
+        self._state, self._message = "issuing", f"正在为角色 {role_id} 签发 token ..."
+        result = await self._issue_token(self._cookies, role_id)
+        self._result = result
+        self._qr_b64 = ""
+        if self._on_success:
+            try:
+                await self._on_success(result, self._cookies)
+                self._saved = True
+                self._message = f"token 已写入插件配置(角色 {result['role_id']}),登录 cookie 已保存"
+            except Exception as e:
+                self._message = f"token 签发成功但写入配置失败: {e};请手动填入 token={result['token']}"
+            self._state = "done"
+        else:
+            self._saved = False
+            self._message = f"token 签发成功: {result['token']}"
+            self._state = "done"
+        logger.info(f"[燕云查询] 签发完成: {self._message}")
 
     async def _issue_token(self, cookies: list[dict], role_id: str) -> dict:
         jar = {c["name"]: c["value"] for c in cookies}

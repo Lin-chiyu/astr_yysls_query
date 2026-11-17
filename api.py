@@ -31,6 +31,7 @@ BASE_URL = "https://datamsapi.ds.163.com"
 EP_PROXY_ROLE = "/v1/h72roletool/proxyGameRole"  # 角色全量档案(推荐,数据最全)
 EP_ROLE_INFO = "/v1/h72roletool/roleInfo"        # 家园/突破/功法日常等
 EP_QUERY_PVP = "/v1/h72roletool/queryPvp"        # PVP 数据
+GET_BIND_LIST_URL = "https://inf.ds.163.com/v1/web/role-list-query/getBindList"  # 账号下绑定的角色列表
 
 BIZ_OK = 0  # 响应里 code==0 为成功
 
@@ -216,7 +217,7 @@ class DashenClient:
         if not cred.cookies:
             raise DashenAPIError(
                 f"凭据「{cred.name}」没有登录 cookie,该功能需要扫码登录获取"
-                "(面板一键获取或「燕云扫码」都会自动保存)。"
+                "(面板一键获取或「燕云登录」都会自动保存)。"
             )
         session = self._session
         if session is None or session.closed:
@@ -261,6 +262,41 @@ class DashenClient:
         return data
 
     # -- 业务方法 ------------------------------------------------------------
+
+    async def query_bind_list(self, cookies: list[dict]) -> list[dict[str, Any]]:
+        """用扫码得到的登录 cookie 查该账号绑定的燕云角色。
+
+        返回 [{role_id, nick, level, server, server_name}],只保留燕云(h72),
+        按等级降序;其它游戏(如 h73 七日世界)一律过滤。
+        """
+        cred = Credential(name="扫码登录", role_id="", token="", cookies=list(cookies))
+        data = await self.post_with_cookies(GET_BIND_LIST_URL, {}, cred)
+        rows = data.get("result") or []
+        if isinstance(rows, dict):
+            rows = rows.get("list") or []
+
+        def _lv(v: Any) -> int:
+            try:
+                return int(str(v).strip())
+            except (TypeError, ValueError):
+                return 0
+
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            if str(r.get("appKey") or "") != "h72":
+                continue
+            rid = str(r.get("roleId") or "").strip()
+            if not rid:
+                continue
+            out.append({
+                "role_id": rid,
+                "nick": str(r.get("nick") or "").strip(),
+                "level": str(r.get("level") or "").strip(),
+                "server": str(r.get("server") or "").strip(),
+                "server_name": str(r.get("serverName") or "").strip(),
+            })
+        out.sort(key=lambda x: (-_lv(x["level"]), x["role_id"]))
+        return out
 
     async def query_role_data(self, role_id: str) -> dict[str, Any]:
         """调号助手数据(attributePanel/combatPanel/role 结构化),cookie 鉴权。"""
