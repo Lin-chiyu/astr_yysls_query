@@ -238,7 +238,7 @@ class YanyunQueryPlugin(Star):
             attrs_data = resp_proxy.get("data") or {}
             attrs = _render_attrs(attrs_data, as_blocks=True)
             attrs_text = "\n".join(attrs) if attrs else ""
-            img_path = await self._render_combined_image_file(attrs_data, resp_info.get("data") or {})
+            img_path = await self._render_profile_image_file(attrs_data, resp_info.get("data") or {})
             if img_path is not None:
                 try:
                     await event.send(event.chain_result([Comp.Image.fromFileSystem(str(img_path))]))
@@ -779,7 +779,7 @@ class YanyunQueryPlugin(Star):
                 self.client.query_proxy_role(identity),
             )
             attrs_data = resp_proxy.get("data") or {}
-            img_path = await self._render_combined_image_file(attrs_data, resp_info.get("data") or {})
+            img_path = await self._render_profile_image_file(attrs_data, resp_info.get("data") or {})
             if img_path is None:
                 blocks = render_role_info(resp_info, f"燕云家园与日常 · {identity}", as_blocks=True)
                 attrs = _render_attrs(attrs_data, as_blocks=True)
