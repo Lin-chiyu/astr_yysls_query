@@ -105,8 +105,8 @@ def build_advisor(proxy: dict, info: dict | None = None) -> dict:
     counts = {n: c for n, _, c in view["totals"]}
     slots_by: dict[str, list[str]] = {}
     for eq in view["per_equip"]:
-        for an, _ in eq["affixes"]:
-            lst = slots_by.setdefault(an, [])
+        for a in eq["affixes"]:
+            lst = slots_by.setdefault(a[0], [])
             if eq["slot"] not in lst:
                 lst.append(eq["slot"])
 

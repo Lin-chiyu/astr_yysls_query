@@ -256,12 +256,22 @@ def _collect_attrs(data: dict) -> dict:
             suit = _map_name("suffix", suffix_id) if suffix_id is not None else None
             if str(slot_no) in ARCHER_SKIP_SLOTS:
                 continue  # 弓箭类整块不展示(变量名勿用 level,避免遮蔽人物等级)
-            item_affixes: list[tuple[str, str]] = []
+            item_affixes: list[tuple[str, str, int, float]] = []
             for aff in affs:
                 try:
                     aid, val = aff[0], float(aff[1])
                 except (IndexError, TypeError, ValueError):
                     continue
+                # base_affixes 结构:[词条ID, 数值, 洗练进度0~1, 品阶, 是否推荐]
+                try:
+                    rarity = int(aff[3])
+                except (IndexError, TypeError, ValueError):
+                    rarity = 1
+                try:
+                    progress = float(aff[2])
+                except (IndexError, TypeError, ValueError):
+                    progress = 1.0
+                progress = min(1.0, max(0.0, progress))
                 info = affix_map.get(str(aid)) or {}
                 name = info.get("name") or f"词条{aid}"
                 unit = info.get("unit") or ""
@@ -274,7 +284,7 @@ def _collect_attrs(data: dict) -> dict:
                 else:
                     v = int(val) if float(val).is_integer() else round(val, 1)
                     disp = f"+{v}"
-                item_affixes.append((name, disp))
+                item_affixes.append((name, disp, rarity, progress))
             if item_affixes:
                 per_equip.append(
                     {"slot": slot_label, "slot_no": str(slot_no), "name": eq_name, "level": equip_level, "suit": suit, "affixes": item_affixes}
@@ -327,7 +337,7 @@ def _render_attrs(data: dict, as_blocks: bool = False) -> list[str] | str:
         lines.append(f"装备词条(按装备,共{view['affix_total']}条):")
         for eq in view["per_equip"]:
             lines.append(f"  {eq['slot']}·{eq['name']}{_equip_tag(eq)}")
-            lines.extend(f"    {n} {d}" for n, d in eq["affixes"])
+            lines.extend(f"    {a[0]} {a[1]}" for a in eq["affixes"])
 
     if view["totals"]:
         lines.append("装备词条汇总(不含弓箭类):")

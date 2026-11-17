@@ -37,6 +37,23 @@ except ImportError:
 # 装备栏排布(用户指定,弓/射决不展示):上排 主武器/副武器|冠胄/胸甲,下排 环/佩|胫甲/腕甲,
 # 两组之间留大间隔(轨道 3 为间隔列)
 _PANEL_ORDER = ("1", "2", "3", "4", "10", "11", "5", "8")
+# 词条品阶配色(取自官方前端 career_pages.js):0 灰绿 / 1 蓝 / 2 紫 / 3·4 金
+_RARITY_COLORS = {0: "#93B6A4", 1: "#8DB4C9", 2: "#AA98C7", 3: "#D4C394", 4: "#D4C394"}
+
+
+def _rarity_color(rarity: Any) -> str:
+    try:
+        return _RARITY_COLORS.get(int(rarity), "#B5B5B5")
+    except (TypeError, ValueError):
+        return "#B5B5B5"
+
+
+def _rarity_cls(rarity: Any) -> int:
+    try:
+        return min(3, max(0, int(rarity)))
+    except (TypeError, ValueError):
+        return 0
+
 _CELL_COL = {"1": "1", "2": "2", "3": "4", "4": "5",
              "10": "1", "11": "2", "5": "4", "8": "5"}
 
@@ -95,8 +112,23 @@ _STYLE = f"""
   .aff {{ display: flex; justify-content: space-between; gap: 8px;
           font-size: 14.5px; line-height: 1.85; font-variant-numeric: tabular-nums; }}
   .aff .an {{ color: #a8b0bf; }}
+  .aff .an.r0 {{ color: #93B6A4; }}
+  .aff .an.r1 {{ color: #8DB4C9; }}
+  .aff .an.r2 {{ color: #AA98C7; }}
+  .aff .an.r3 {{ color: #D4C394; }}
   .aff .av {{ color: #e8e4d8; white-space: nowrap; }}
   .aff .av.pct {{ color: #7cc7e8; }}
+  .aff .av.r0 {{ color: #93B6A4; }}
+  .aff .av.r1 {{ color: #8DB4C9; }}
+  .aff .av.r2 {{ color: #AA98C7; }}
+  .aff .av.r3 {{ color: #D4C394; }}
+  .affbar {{ height: 3px; border-radius: 2px; margin: -2px 0 4px;
+             background: rgba(255,255,255,.07); overflow: hidden; }}
+  .affbar > i {{ display: block; height: 100%; background: var(--c, #B5B5B5);
+                 opacity: .85; }}
+  .affbar > i.full {{ background: linear-gradient(90deg, #f0a8d8 0%, #f7d9c9 26%,
+                     #fbf4dc 48%, #cdeee6 72%, #b3c9f5 100%);
+                     opacity: 1; box-shadow: 0 0 6px rgba(210,225,255,.35); }}
   .anote {{ color: #5c6472; font-size: 13.5px; margin-top: 2px; }}
   .totals {{ display: grid; grid-template-columns: 1fr 1fr; gap: 6px 22px; }}
   .trow {{ display: flex; align-items: baseline; gap: 8px;
@@ -248,6 +280,32 @@ def _is_pct(value_disp: str) -> bool:
     return value_disp.endswith("%")
 
 
+def _affix_rows(affixes: list) -> str:
+    """渲染单件装备的词条:词条名按品阶着色,下方附洗练进度条。
+
+    词条元组约定为 (名称, 数值文本, 品阶, 洗练进度0~1);只有前两项时按金+满进度显示。
+    """
+    rows: list[str] = []
+    for a in affixes:
+        name = a[0] if len(a) > 0 else ""
+        disp = a[1] if len(a) > 1 else ""
+        rarity = a[2] if len(a) > 2 else 1
+        progress = a[3] if len(a) > 3 else 1.0
+        try:
+            pct = max(0.0, min(100.0, float(progress) * 100))
+        except (TypeError, ValueError):
+            pct = 100.0
+        cls = _rarity_cls(rarity)
+        bar_cls = "full" if pct >= 99.5 else ""
+        rows.append(
+            f'<div class="aff"><span class="an r{cls}">{_esc(name)}</span>'
+            f'<span class="av r{cls}{" pct" if _is_pct(disp) else ""}">{_esc(disp)}</span></div>'
+            f'<div class="affbar" style="--c:{_rarity_color(rarity)}">'
+            f'<i class="{bar_cls}" style="width:{pct:.0f}%"></i></div>'
+        )
+    return "".join(rows)
+
+
 def _tags_html(eq: dict) -> str:
     """装备头部右侧徽章:套装(金) + 等级(灰),缺啥省啥。"""
     bits = []
@@ -295,11 +353,7 @@ def _attrs_sections(view: dict, panel_attrs: list | None = None, include_wuwei: 
                     f'<div class="anote">未装备</div></div>'
                 )
                 continue
-            rows = "".join(
-                f'<div class="aff"><span class="an">{_esc(n)}</span>'
-                f'<span class="av{" pct" if _is_pct(d) else ""}">{_esc(d)}</span></div>'
-                for n, d in eq["affixes"]
-            )
+            rows = _affix_rows(eq["affixes"])
             head = (
                 f'<div class="eq-name"><span class="slot">{_esc(eq["slot"])}</span>'
                 f'<span class="nm">{_esc(eq["name"])}</span></div>'
@@ -307,11 +361,7 @@ def _attrs_sections(view: dict, panel_attrs: list | None = None, include_wuwei: 
             )
             cards.append(f'<div class="equip"{style}>{head}{rows}</div>')
         for eq in by_slot.values():  # 防御:未在排布表里的槽位追加在末尾
-            rows = "".join(
-                f'<div class="aff"><span class="an">{_esc(n)}</span>'
-                f'<span class="av{" pct" if _is_pct(d) else ""}">{_esc(d)}</span></div>'
-                for n, d in eq.get("affixes") or []
-            )
+            rows = _affix_rows(eq.get("affixes") or [])
             head = (
                 f'<div class="eq-name"><span class="slot">{_esc(eq["slot"])}</span>'
                 f'<span class="nm">{_esc(eq["name"])}</span></div>'
