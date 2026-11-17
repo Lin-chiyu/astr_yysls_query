@@ -118,6 +118,10 @@ class CredentialPool:
                 return c
         return None
 
+    def role_ids(self) -> set[str]:
+        """当前池里可用的角色编号集合(用于清理失效绑定)。"""
+        return {c.role_id for c in self._creds if c.enabled and c.role_id}
+
     def any_usable(self) -> Credential | None:
         usable = [c for c in self._creds if c.enabled and not c.in_cooldown()]
         return usable[0] if usable else None
@@ -302,7 +306,7 @@ class DashenClient:
         """调号助手数据(attributePanel/combatPanel/role 结构化),cookie 鉴权。"""
         cred = self._pool.by_role(role_id)
         if cred is None:
-            raise DashenAPIError(f"凭据池里没有角色 {role_id}。")
+            raise DashenAPIError(f"角色 {role_id} 目前没有有效凭据,请私聊发「燕云登录」扫码登录后再查询。")
         url = "https://inf-act.ds.163.com/v1/act-web/act-play/h72-role-tool/role-data"
         return await self.post_with_cookies(url, {"roleId": role_id}, cred)
 
@@ -310,7 +314,7 @@ class DashenClient:
         """全服分档基准(等级段×流派),cookie 鉴权。"""
         cred = self._pool.by_role(role_id)
         if cred is None:
-            raise DashenAPIError(f"凭据池里没有角色 {role_id}。")
+            raise DashenAPIError(f"角色 {role_id} 目前没有有效凭据,请私聊发「燕云登录」扫码登录后再查询。")
         url = "https://inf-act.ds.163.com/v1/act-web/act-play/h72-role-tool/benchmark"
         return await self.post_with_cookies(url, {}, cred)
 
@@ -319,7 +323,7 @@ class DashenClient:
         cred = self._pool.by_role(role_id)
         if cred is None:
             raise DashenAPIError(
-                f"凭据池里没有角色 {role_id}。可查询的角色以管理员配置的凭据为准。"
+                f"角色 {role_id} 目前没有有效凭据,请私聊发「燕云登录」扫码登录后再查询。"
             )
         return await self.post(EP_PROXY_ROLE, cred)
 
@@ -327,14 +331,14 @@ class DashenClient:
         """家园/突破日志/功法日常等。"""
         cred = self._pool.by_role(role_id)
         if cred is None:
-            raise DashenAPIError(f"凭据池里没有角色 {role_id}。")
+            raise DashenAPIError(f"角色 {role_id} 目前没有有效凭据,请私聊发「燕云登录」扫码登录后再查询。")
         return await self.post(EP_ROLE_INFO, cred)
 
     async def query_pvp(self, role_id: str) -> dict[str, Any]:
         """PVP 数据。"""
         cred = self._pool.by_role(role_id)
         if cred is None:
-            raise DashenAPIError(f"凭据池里没有角色 {role_id}。")
+            raise DashenAPIError(f"角色 {role_id} 目前没有有效凭据,请私聊发「燕云登录」扫码登录后再查询。")
         return await self.post(EP_QUERY_PVP, cred)
 
     async def health_check(self) -> list[str]:

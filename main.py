@@ -106,15 +106,30 @@ class YanyunQueryPlugin(Star):
         return uid
 
     async def initialize(self):
-        """注册 WebUI 面板后端 API(需要 AstrBot >= 4.27.5)。"""
+        """注册 WebUI 面板后端 API(需要 AstrBot >= 4.27.5),并清理失效绑定。"""
         if not WEB_API_OK:
             logger.warning("[燕云查询] 当前 AstrBot 版本缺少 astrbot.api.web,面板功能不可用,请升级到 4.27.5+")
         else:
             await self._register_web_apis()
 
+        # 凭据被删除/替换后,清掉那些绑到「已经没有凭据的角色」上的记录
+        await self._prune_orphan_bindings()
+
         # 首次安装自愈:后台预装浏览器,避免用户首次扫码干等
         if self.config.get("preinstall_browser", True):
             asyncio.create_task(self._prewarm_browser())
+
+    async def _prune_orphan_bindings(self):
+        """剔除绑到「不在凭据池里的角色」的绑定,避免用户查到一半才发现凭据没了。"""
+        try:
+            keep = self.client._pool.role_ids()
+            removed = await self.store.prune_identities(keep)
+            if removed:
+                logger.info(
+                    f"[燕云查询] 已清理 {len(removed)} 条失效绑定(对应角色已无凭据):{', '.join(removed)}"
+                )
+        except Exception as e:
+            logger.warning(f"[燕云查询] 清理失效绑定失败: {e}")
 
     async def _register_web_apis(self):
         try:
@@ -178,12 +193,28 @@ class YanyunQueryPlugin(Star):
 
     async def _resolve_role_for_llm(self, event: AstrMessageEvent, role_id: str) -> tuple[str | None, str]:
         role_id = (role_id or "").strip()
-        if role_id:
-            return role_id, ""
-        bind = await self.store.get(event.get_sender_id())
-        if not bind:
-            return None, "该用户还没有绑定燕云角色,请引导其私聊发送「燕云登录」完成登录绑定,或发送「燕云绑定 <角色编号>」"
-        return bind.get("identity"), ""
+        if not role_id:
+            bind = await self.store.get(event.get_sender_id())
+            if not bind:
+                return None, self._login_hint(event)
+            role_id = str(bind.get("identity") or "").strip()
+        if not role_id:
+            return None, self._login_hint(event)
+        if self.client._pool.by_role(role_id) is None:
+            logger.info(f"[燕云查询] 角色 {role_id} 没有可用凭据,引导用户重新登录")
+            return None, self._login_hint(event, role_id)
+        return role_id, ""
+
+    @staticmethod
+    def _login_hint(event: AstrMessageEvent, role_id: str = "") -> str:
+        """给 LLM 的软提示:让它用自己的口吻劝用户去登录,而不是复述技术报错。"""
+        where = "先私聊找我发「燕云登录」" if event.get_group_id() else "先发「燕云登录」"
+        reason = f"(角色 {role_id} 还没登录过)" if role_id else "(还没绑定角色)"
+        return (
+            f"【情况】这个用户查不到数据{reason}。\n"
+            f"【请这样回】用你平时聊天的口吻,简短跟对方说一句:{where}登录绑定一下,再回来查。"
+            "别提「凭据」「接口」「系统」「错误码」这类词,也别长篇解释或道歉套话。"
+        )
 
     DELIVERED_NOTICE = "[已向用户发送图卡,数据已完整展示给用户,本轮不需要再用文字复述]"
 

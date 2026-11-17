@@ -54,3 +54,26 @@ class BindingStore:
                 await self._save()
                 return True
             return False
+
+    async def all(self) -> dict[str, dict]:
+        async with self._lock:
+            self._load()
+            return dict(self._data)
+
+    async def prune_identities(self, keep: set[str]) -> list[str]:
+        """删掉所绑角色已不在 keep 里的记录,返回被清理的用户 id。
+
+        用于「管理员删掉某个角色的凭据后,对应用户的绑定一并失效」。
+        """
+        async with self._lock:
+            self._load()
+            removed = [
+                uid
+                for uid, item in self._data.items()
+                if str(item.get("identity") or "").strip() not in keep
+            ]
+            if removed:
+                for uid in removed:
+                    del self._data[uid]
+                await self._save()
+            return removed
