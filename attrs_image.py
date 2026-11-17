@@ -86,13 +86,6 @@ _STYLE = f"""
   .sec-title::before {{ content: ""; width: 3px; height: 14px;
                         background: #d8b26a; border-radius: 2px; }}
   .sec-title .n {{ color: #767f8f; font-size: 15px; letter-spacing: 0; }}
-  .wuwei {{ display: flex; justify-content: space-between; gap: 8px;
-            background: rgba(216,178,106,.07); border: 1px solid rgba(216,178,106,.16);
-            border-radius: 10px; padding: 10px 16px; }}
-  .wuwei .cell {{ text-align: center; flex: 1; }}
-  .wuwei .k {{ font-size: 15px; color: #9aa2b1; margin-bottom: 2px; }}
-  .wuwei .v {{ font-size: 21px; font-weight: 600; color: #f0ead8;
-               font-variant-numeric: tabular-nums; }}
   .equips {{ display: grid;
              grid-template-columns: repeat(2, 1fr) 24px repeat(2, 1fr);
              gap: 10px; }}
@@ -122,6 +115,10 @@ _STYLE = f"""
   .aff .av.r1 {{ color: #8DB4C9; }}
   .aff .av.r2 {{ color: #AA98C7; }}
   .aff .av.r3 {{ color: #D4C394; }}
+  .aff .rec {{ font-style: normal; margin-left: 5px; font-size: 11.5px; line-height: 1;
+               padding: 1px 3px; border-radius: 4px; vertical-align: 1.5px;
+               color: #e3c27e; background: rgba(216,178,106,.14);
+               border: 1px solid rgba(216,178,106,.38); }}
   .affbar {{ height: 3px; border-radius: 2px; margin: -2px 0 4px;
              background: rgba(255,255,255,.07); overflow: hidden; }}
   .affbar > i {{ display: block; height: 100%; background: var(--c, #B5B5B5);
@@ -281,9 +278,10 @@ def _is_pct(value_disp: str) -> bool:
 
 
 def _affix_rows(affixes: list) -> str:
-    """渲染单件装备的词条:词条名按品阶着色,下方附洗练进度条。
+    """渲染单件装备的词条:词条名按品阶着色,下方附洗练进度条,推荐词条带「荐」标。
 
-    词条元组约定为 (名称, 数值文本, 品阶, 洗练进度0~1);只有前两项时按金+满进度显示。
+    词条元组约定为 (名称, 数值文本, 品阶, 洗练进度0~1, 是否推荐);
+    缺省项按金 / 满进度 / 非推荐处理。
     """
     rows: list[str] = []
     for a in affixes:
@@ -291,14 +289,16 @@ def _affix_rows(affixes: list) -> str:
         disp = a[1] if len(a) > 1 else ""
         rarity = a[2] if len(a) > 2 else 1
         progress = a[3] if len(a) > 3 else 1.0
+        rec = bool(a[4]) if len(a) > 4 else False
         try:
             pct = max(0.0, min(100.0, float(progress) * 100))
         except (TypeError, ValueError):
             pct = 100.0
         cls = _rarity_cls(rarity)
         bar_cls = "full" if pct >= 99.5 else ""
+        rec_html = '<i class="rec">荐</i>' if rec else ""
         rows.append(
-            f'<div class="aff"><span class="an r{cls}">{_esc(name)}</span>'
+            f'<div class="aff"><span class="an r{cls}">{_esc(name)}{rec_html}</span>'
             f'<span class="av r{cls}{" pct" if _is_pct(disp) else ""}">{_esc(disp)}</span></div>'
             f'<div class="affbar" style="--c:{_rarity_color(rarity)}">'
             f'<i class="{bar_cls}" style="width:{pct:.0f}%"></i></div>'
@@ -316,17 +316,9 @@ def _tags_html(eq: dict) -> str:
     return "".join(bits)
 
 
-def _attrs_sections(view: dict, panel_attrs: list | None = None, include_wuwei: bool = True) -> list[str]:
-    """属性一览各区块(不含卡片包装/头部/尾注)。include_wuwei=False 用于合并总览卡(五维条另行展示)。"""
+def _attrs_sections(view: dict, panel_attrs: list | None = None) -> list[str]:
+    """属性一览各区块(不含卡片包装/头部/尾注)。"""
     parts: list[str] = []
-
-    if include_wuwei and view.get("wuwei"):
-        cells = "".join(
-            f'<div class="cell"><div class="k">{_esc(n)}</div>'
-            f'<div class="v">{_esc(v)}</div></div>'
-            for n, v in view["wuwei"]
-        )
-        parts.append(f'<div class="sec"><div class="wuwei">{cells}</div></div>')
 
     if panel_attrs:
         cells = "".join(
@@ -389,88 +381,6 @@ def _attrs_sections(view: dict, panel_attrs: list | None = None, include_wuwei: 
         )
 
     return parts
-
-
-def build_attrs_html(view: dict, panel_attrs: list | None = None) -> str:
-    """把 _collect_attrs 的视图数据渲染成完整 HTML(属性一览卡)。"""
-    from datetime import datetime
-
-    who_bits = []
-    if view.get("nickname"):
-        who_bits.append(f"<b>{_esc(view['nickname'])}</b>")
-    if view.get("level") not in (None, ""):
-        who_bits.append(f"Lv.{_esc(view['level'])}")
-    who = " · ".join(who_bits)
-
-    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    return f"""<!DOCTYPE html><html><head><meta charset="utf-8">
-<style>{_STYLE}</style></head><body><div id="card">
-<div class="head"><div class="title">属性一览</div>
-<div class="who">{who}</div></div>
-{"".join(_attrs_sections(view, panel_attrs))}
-<div class="foot">数据来源:网易大神 · 生成于 {stamp}</div>
-</div></body></html>"""
-
-
-async def render_attrs_image(
-    data: dict, mirror: str = "", auto_install: bool = True, info_data: dict | None = None
-) -> bytes | None:
-    """渲染属性一览 PNG。成功返回图片字节,任何失败返回 None(调用方回退纯文本)。
-
-    info_data: roleInfo 的 data(可选),提供时卡片附加「面板属性」区。
-    先走 yanyun_login.ensure_browser_ready(探测链+自动安装);该模块不可用时
-    (如本地回归无 astrbot)退化为直接启动内置 chromium。
-    """
-    view = _collect_attrs(data)
-    if not (view["wuwei"] or view["per_equip"] or view["totals"]):
-        return None  # 没有可展示的数据
-    page_html = build_attrs_html(view, _collect_panel_attrs(info_data))
-
-    if not _PW_OK:
-        logger.warning("[燕云图片] playwright 未安装,回退文本输出")
-        return None
-
-    launch_kwargs: dict = {}
-    pw = None
-    browser = None
-    try:
-        try:
-            try:
-                from .yanyun_login import ensure_browser_ready
-            except ImportError:
-                from yanyun_login import ensure_browser_ready  # type: ignore[no-redef]
-
-            ok, msg, launch_kwargs = await ensure_browser_ready(
-                mirror=mirror, auto_install=auto_install
-            )
-            if not ok:
-                logger.warning(f"[燕云图片] 无可用浏览器: {msg}")
-                return None
-        except ImportError:
-            # 本地回归/独立运行(astrbot 缺失):按 yanyun_login 同款顺序探测浏览器
-            launch_kwargs = await _probe_fallback_browser()
-
-        pw = await async_playwright().start()
-        browser = await pw.chromium.launch(headless=True, **launch_kwargs)
-        page = await browser.new_page(
-            viewport={"width": 1040, "height": 700}, device_scale_factor=2
-        )
-        await page.set_content(page_html, wait_until="load")
-        card = page.locator("#card")
-        png = await card.screenshot(type="png")
-        logger.info(f"[燕云图片] 属性一览渲染成功({len(png) // 1024}KB)")
-        return png
-    except Exception as e:
-        logger.warning(f"[燕云图片] 渲染失败,将回退文本: {type(e).__name__}: {e}")
-        return None
-    finally:
-        for closer in ((lambda: browser and browser.close()), (lambda: pw and pw.stop())):
-            try:
-                r = closer()
-                if r is not None:
-                    await r
-            except Exception:
-                pass
 
 
 # ============================ 养成分析卡片 ============================
@@ -908,69 +818,6 @@ def _profile_sections(p: dict) -> list[str]:
     return h
 
 
-def build_profile_html(p: dict) -> str:
-    """把 _collect_profile 的数据渲染成完整 HTML(角色档案卡)。"""
-    from datetime import datetime
-
-    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    return (f'''<!DOCTYPE html><html><head><meta charset="utf-8"><style>{_STYLE}{_PROFILE_CSS}
-</style></head><body><div id="pcard">
-<div class="head"><div class="title">角色档案</div><div class="who">{_profile_who(p)}</div></div>
-{"".join(_profile_sections(p))}
-<div class="foot">数据来源:网易大神 · 生成于 {stamp}</div>
-</div></body></html>''')
-
-
-async def render_profile_image(proxy_data: dict, info_data: dict | None = None,
-                               mirror: str = "", auto_install: bool = True) -> bytes | None:
-    """渲染「燕云我的」角色档案卡 PNG。失败返回 None,调用方回退文本块。"""
-    if not _PW_OK:
-        return None
-    try:
-        p = _collect_profile(proxy_data, info_data)
-        if not (p.get("nickname") or p.get("power") is not None):
-            return None
-        page_html = build_profile_html(p)
-    except Exception as e:
-        logger.warning(f"[燕云图片] 档案数据收集失败: {type(e).__name__}: {e}")
-        return None
-
-    launch_kwargs: dict = {}
-    pw = None
-    browser = None
-    try:
-        try:
-            try:
-                from .yanyun_login import ensure_browser_ready
-            except ImportError:
-                from yanyun_login import ensure_browser_ready  # type: ignore[no-redef]
-            ok, msg, launch_kwargs = await ensure_browser_ready(mirror=mirror, auto_install=auto_install)
-            if not ok:
-                logger.warning(f"[燕云图片] 无可用浏览器: {msg}")
-                return None
-        except ImportError:
-            launch_kwargs = await _probe_fallback_browser()
-
-        pw = await async_playwright().start()
-        browser = await pw.chromium.launch(headless=True, **launch_kwargs)
-        page = await browser.new_page(viewport={"width": 760, "height": 700}, device_scale_factor=2)
-        await page.set_content(page_html, wait_until="load")
-        png = await page.locator("#pcard").screenshot(type="png")
-        logger.info(f"[燕云图片] 档案卡渲染成功({len(png) // 1024}KB)")
-        return png
-    except Exception as e:
-        logger.warning(f"[燕云图片] 档案卡渲染失败,将回退文本: {type(e).__name__}: {e}")
-        return None
-    finally:
-        for closer in ((lambda: browser and browser.close()), (lambda: pw and pw.stop())):
-            try:
-                r = closer()
-                if r is not None:
-                    await r
-            except Exception:
-                pass
-
-
 # ============================ 角色档案 + 属性一览 合并卡 ============================
 
 _COMBINED_SPLIT_CSS = """
@@ -983,7 +830,7 @@ def build_combined_html(p: dict, view: dict, panel_attrs: list | None = None) ->
     from datetime import datetime
 
     prof_secs = _profile_sections(p)
-    attr_secs = _attrs_sections(view, panel_attrs, include_wuwei=False)
+    attr_secs = _attrs_sections(view, panel_attrs)
     css = _PROFILE_CSS.replace("#pcard", "#card") + _STYLE + _COMBINED_SPLIT_CSS
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     return (f'''<!DOCTYPE html><html><head><meta charset="utf-8"><style>{css}

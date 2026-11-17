@@ -256,7 +256,7 @@ def _collect_attrs(data: dict) -> dict:
             suit = _map_name("suffix", suffix_id) if suffix_id is not None else None
             if str(slot_no) in ARCHER_SKIP_SLOTS:
                 continue  # 弓箭类整块不展示(变量名勿用 level,避免遮蔽人物等级)
-            item_affixes: list[tuple[str, str, int, float]] = []
+            item_affixes: list[tuple[str, str, int, float, bool]] = []
             for aff in affs:
                 try:
                     aid, val = aff[0], float(aff[1])
@@ -272,6 +272,7 @@ def _collect_attrs(data: dict) -> dict:
                 except (IndexError, TypeError, ValueError):
                     progress = 1.0
                 progress = min(1.0, max(0.0, progress))
+                recommended = bool(aff[4]) if len(aff) > 4 else False
                 info = affix_map.get(str(aid)) or {}
                 name = info.get("name") or f"词条{aid}"
                 unit = info.get("unit") or ""
@@ -284,7 +285,7 @@ def _collect_attrs(data: dict) -> dict:
                 else:
                     v = int(val) if float(val).is_integer() else round(val, 1)
                     disp = f"+{v}"
-                item_affixes.append((name, disp, rarity, progress))
+                item_affixes.append((name, disp, rarity, progress, recommended))
             if item_affixes:
                 per_equip.append(
                     {"slot": slot_label, "slot_no": str(slot_no), "name": eq_name, "level": equip_level, "suit": suit, "affixes": item_affixes}

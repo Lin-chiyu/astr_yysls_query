@@ -21,7 +21,7 @@ from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core.utils.session_waiter import SessionController, session_waiter
 
 from .api import DashenAPIError, DashenClient, TokenInvalidError
-from .attrs_image import render_advisor_image, render_combined_image, render_profile_image
+from .attrs_image import render_advisor_image, render_combined_image
 from .build_advisor import build_advisor, make_ai_prompt, render_text as render_advisor_text, rule_summary
 from .render import _render_attrs, render_generic, render_pvp, render_proxy_role, render_role_info
 from .storage import BindingStore
@@ -54,7 +54,7 @@ HELP_TEXT = """【燕云十六声查询】指令列表
 ⚠ 调用的是网易非公开接口,token 年度有效,仅供学习交流。"""
 
 
-@register("astrbot_plugin_yanyun_query", "林迟羽", "燕云十六声角色查询(角色档案/探索度/流派配置/面板属性)", "v1.0.5")
+@register("astrbot_plugin_yanyun_query", "林迟羽", "燕云十六声角色查询(角色档案/探索度/流派配置/面板属性)", "v1.0.6")
 class YanyunQueryPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -581,24 +581,6 @@ class YanyunQueryPlugin(Star):
         except Exception as e:
             logger.warning(f"[燕云图片] 图片落盘失败: {e}")
             return None
-
-    async def _render_attrs_image_file(self, proxy_data: dict, info_data: dict | None = None) -> Path | None:
-        """渲染属性一览图片(受 attrs_image 配置开关控制);失败/关闭返回 None。"""
-        if not bool(self.config.get("attrs_image", True)):
-            return None
-        try:
-            png = await render_attrs_image(
-                proxy_data,
-                info_data=info_data,
-                mirror=str(self.config.get("browser_download_mirror") or ""),
-                auto_install=bool(self.config.get("auto_install_browser", True)),
-            )
-        except Exception as e:
-            logger.warning(f"[燕云图片] 渲染异常,回退文本: {type(e).__name__}: {e}")
-            return None
-        if not png:
-            return None
-        return self._save_attrs_png(png)
 
     async def _render_profile_image_file(self, proxy_data: dict, info_data: dict) -> Path | None:
         """渲染「总览」合并卡(受 profile_image 配置开关控制);失败/关闭返回 None。"""
