@@ -54,7 +54,7 @@ HELP_TEXT = """【燕云十六声查询】指令列表
 ⚠ 调用的是网易非公开接口,token 年度有效,仅供学习交流。"""
 
 
-@register("astrbot_plugin_yanyun_query", "林迟羽", "燕云十六声角色查询(角色档案/探索度/流派配置/面板属性)", "v1.0.6")
+@register("astrbot_plugin_yanyun_query", "林迟羽", "燕云十六声角色查询(角色档案/探索度/流派配置/面板属性)", "v1.0.0")
 class YanyunQueryPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -174,15 +174,18 @@ class YanyunQueryPlugin(Star):
             return None, "该用户还没有绑定燕云角色,请引导其私聊发送「燕云扫码」完成登录绑定,或发送「燕云绑定 <角色编号>」"
         return bind.get("identity"), ""
 
+    DELIVERED_NOTICE = "[已向用户发送图卡,数据已完整展示给用户,本轮不需要再用文字复述]"
+
     @staticmethod
     def _stop_after_delivery(event: AstrMessageEvent) -> str:
         """图卡/文本已在工具内直接发送给用户时调用。
 
-        把本轮 Agent 标记为停止,避免大模型再拿工具返回值写一段总结;
-        同时返回空字符串,不再把数据回灌给模型。
+        把本轮 Agent 标记为停止,避免大模型再拿工具返回值写一段总结。
+        注意:返回值不能是空字符串 —— 模型会把「调用成功但返回为空」误判为
+        数据拉取失败(表现为后续回复「数据拉不到」),所以这里返回一句明确说明。
         """
         event.set_extra("agent_stop_requested", True)
-        return ""
+        return YanyunQueryPlugin.DELIVERED_NOTICE
 
     @filter.llm_tool(name="yanyun_query_profile")
     async def yanyun_query_profile(self, event: AstrMessageEvent, role_id: str = "") -> str:
