@@ -193,6 +193,7 @@ class YanyunQueryPlugin(Star):
 
     async def _resolve_role_for_llm(self, event: AstrMessageEvent, role_id: str) -> tuple[str | None, str]:
         role_id = (role_id or "").strip()
+        explicit = bool(role_id)
         if not role_id:
             bind = await self.store.get(event.get_sender_id())
             if not bind:
@@ -200,6 +201,10 @@ class YanyunQueryPlugin(Star):
             role_id = str(bind.get("identity") or "").strip()
         if not role_id:
             return None, self._login_hint(event)
+        if explicit:
+            denied = await self._ensure_own_role(event, role_id)
+            if denied:
+                return None, denied
         if self.client._pool.by_role(role_id) is None:
             logger.info(f"[燕云查询] 角色 {role_id} 没有可用凭据,引导用户重新登录")
             return None, self._login_hint(event, role_id)
@@ -215,6 +220,19 @@ class YanyunQueryPlugin(Star):
             f"【请这样回】用你平时聊天的口吻,简短跟对方说一句:{where}登录绑定一下,再回来查。"
             "别提「凭据」「接口」「系统」「错误码」这类词,也别长篇解释或道歉套话。"
         )
+
+    async def _ensure_own_role(self, event: AstrMessageEvent, role_id: str) -> str:
+        """显式指定角色时校验归属:谁都只能查自己绑定的角色。
+
+        返回空串表示放行,否则返回要直接发给用户的拒绝文案。
+        """
+        bind = await self.store.get(event.get_sender_id())
+        own = str((bind or {}).get("identity") or "").strip()
+        if own and own == role_id:
+            return ""
+        if not own:
+            return f"你还没绑定角色,查不了别人的角色数据。想查 {role_id} 的话,先私聊发「燕云登录」绑定。"
+        return f"角色 {role_id} 不是你绑定的(你绑定的是 {own}),只能查自己的角色。"
 
     DELIVERED_NOTICE = "[已向用户发送图卡,数据已完整展示给用户,本轮不需要再用文字复述]"
 
@@ -386,7 +404,12 @@ class YanyunQueryPlugin(Star):
             bind = await self.store.get(event.get_sender_id())
             identity, err = self._resolve_role("", bind)
             if err:
-                yield event.plain_result("用法:燕云分析 <角色编号>(或先「燕云绑定」)")
+                yield event.plain_result("先私聊发「燕云登录」扫码绑定,或者:燕云分析 <角色编号>")
+                return
+        else:
+            err = await self._ensure_own_role(event, identity)
+            if err:
+                yield event.plain_result(err)
                 return
         try:
             resp_info, resp_proxy = await asyncio.gather(
@@ -420,7 +443,12 @@ class YanyunQueryPlugin(Star):
             bind = await self.store.get(event.get_sender_id())
             identity, err = self._resolve_role("", bind)
             if err:
-                yield event.plain_result("用法:燕云面板 <角色编号>(或先「燕云绑定」)")
+                yield event.plain_result("先私聊发「燕云登录」扫码绑定,或者:燕云面板 <角色编号>")
+                return
+        else:
+            err = await self._ensure_own_role(event, identity)
+            if err:
+                yield event.plain_result(err)
                 return
         try:
             panel, bench = await asyncio.gather(
@@ -802,9 +830,13 @@ class YanyunQueryPlugin(Star):
             bind = await self.store.get(event.get_sender_id())
             role_id, err = self._resolve_role("", bind)
             if err:
-                yield event.plain_result("用法:燕云查询 <角色编号>")
+                yield event.plain_result("先私聊发「燕云登录」扫码绑定,或者:燕云查询 <角色编号>")
                 return
         else:
+            err = await self._ensure_own_role(event, identity)
+            if err:
+                yield event.plain_result(err)
+                return
             role_id = identity
         async for r in self._send_profile(event, role_id):
             yield r
@@ -816,7 +848,12 @@ class YanyunQueryPlugin(Star):
             bind = await self.store.get(event.get_sender_id())
             identity, err = self._resolve_role("", bind)
             if err:
-                yield event.plain_result("用法:燕云详情 <角色编号>")
+                yield event.plain_result("先私聊发「燕云登录」扫码绑定,或者:燕云详情 <角色编号>")
+                return
+        else:
+            err = await self._ensure_own_role(event, identity)
+            if err:
+                yield event.plain_result(err)
                 return
         try:
             resp_info, resp_proxy = await asyncio.gather(
@@ -847,7 +884,12 @@ class YanyunQueryPlugin(Star):
             bind = await self.store.get(event.get_sender_id())
             identity, err = self._resolve_role("", bind)
             if err:
-                yield event.plain_result("用法:燕云战绩 <角色编号>")
+                yield event.plain_result("先私聊发「燕云登录」扫码绑定,或者:燕云战绩 <角色编号>")
+                return
+        else:
+            err = await self._ensure_own_role(event, identity)
+            if err:
+                yield event.plain_result(err)
                 return
         async for r in self._send_blocks(event, await self._fetch_blocks(identity, "pvp", f"燕云PVP · {identity}")):
             yield r

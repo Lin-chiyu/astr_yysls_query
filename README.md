@@ -26,47 +26,47 @@ token 本身,签发后完全自动化。token 与角色绑定,一个 token 查�
 
 ## 安装
 
-1. 插件目录(或 zip 解压)放进 AstrBot 的 `data/plugins/`
-2. **浏览器环境会自动安装,无需手动操作**(图片渲染依赖):
-   - 插件加载时后台检查:没有 playwright 包就 `pip install playwright`,没有浏览器就下载 chromium(约 150MB,默认 npmmirror 镜像)
-   - 有系统 Chrome/Edge 的机器直接复用,不下载任何东西
-   - 如果想关闭自动安装:`auto_install_browser: false` / `preinstall_browser: false`
-   - Linux 裸机若提示缺系统库,以 root 执行一次 `playwright install-deps chromium`
-3. 重启 AstrBot(或 WebUI 插件页重载)
-4. 发 `燕云帮助` 确认生效
+> 需要 AstrBot **>= 4.27.5**(WebUI 面板扫码用);更低的版本查询指令也能用,只是没有面板。
 
-> 面板一键获取需要 AstrBot **>= 4.27.5**(views + 插件 API);旧版本仍可用下文手动方式。
+### 方式一:WebUI 安装(推荐)
 
-### Linux 服务器部署(可交给运维/agent 执行)
+1. WebUI → 插件 → 安装插件 → 填仓库地址 `https://github.com/Lin-chiyu/astr_yysls_query`
+2. 装完重载插件,日志出现 `[燕云查询] 已加载` 即成功
+3. 绑定角色:群友私聊机器人说「燕云登录」扫码绑定;或管理员在插件详情页「燕云凭据获取」面板扫码
 
-zip 上传到服务器后,按以下步骤执行:
+### 方式二:手动放进 data/plugins
 
-```text
-1. 找到 AstrBot 安装目录,把 zip 解压到其 data/plugins/ 下,得到
-   data/plugins/astrbot_plugin_yanyun_query/ 目录(含 main.py、metadata.yaml、
-   gamedata/ 映射表、gamedata/liupai_docs/ 流派攻略、views/ 面板页)。
-2. 用 AstrBot 所用的 Python 环境安装依赖:
-   pip install aiohttp playwright pillow
-   playwright install chromium
-   如果 chromium 下载失败或启动报缺系统库,依次尝试:
-   playwright install-deps chromium(需要 root/apt)
-   下载慢可设镜像:export PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright/
-   插件会自动回退到系统 Chrome/Edge(channel=chrome/msedge),服务器上已有其一也能跑。
-3. 重启 AstrBot(或在 WebUI 插件页重载插件)。
-4. 验证:聊天里发「燕云帮助」应返回指令列表;WebUI 插件详情页应出现
-   「燕云凭据获取」面板。
-5. 凭据配置二选一:
-   a. 面板一键获取:打开面板 →「一键获取 token」→ 手机大神 App 扫屏幕上的二维码
-      → 自动列出账号下的燕云角色 → 只有一个角色时直接签发,多个时点选一个 → 写入配置;
-   b. 或在插件配置 dashen_accounts 手动填:
-      [{"name":"xx","role_id":"角色编号","token":"年度token","dts":"2026","enabled":true}]
-      (token 手动获取方式见下文「凭据获取」)。
-6. 私聊机器人发「燕云状态」(管理员)确认凭据有效;再随便说一句「看看我的角色」验证出图。
+```bash
+cd /path/to/AstrBot/data/plugins
+git clone https://github.com/Lin-chiyu/astr_yysls_query.git astrbot_plugin_yanyun_query
 ```
 
-注意:
-- 不要改动插件目录里的 `gamedata/`(游戏映射表 + 流派攻略文档,渲染与对标依赖它)
-- AstrBot 版本低于 4.27.5 时面板功能自动禁用,查询指令不受影响
+依赖写在 `requirements.txt`(aiohttp / playwright / pillow),AstrBot 安装插件时会自动装;
+如果没装上,用 AstrBot 自己的 Python 环境执行 `pip install -r requirements.txt`。
+
+### 浏览器环境(全自动)
+
+图片卡片和扫码登录都依赖无头浏览器,插件会自己处理:
+
+- 没有 playwright 包 → 自动 `pip install playwright`
+- 没有可用浏览器 → 自动下载 chromium(约 150MB,默认 npmmirror 镜像);有系统 Chrome/Edge 就直接复用,不下载
+- 想关掉自动安装:`auto_install_browser: false` / `preinstall_browser: false`
+- Linux 裸机提示缺系统库时,以 root 执行一次 `playwright install-deps chromium`
+
+### 更新
+
+```bash
+cd /path/to/AstrBot/data/plugins/astrbot_plugin_yanyun_query
+git pull
+```
+
+然后重启 AstrBot(或在 WebUI 插件页重载),日志里能看到加载的版本号。
+
+### 注意
+
+- 不要改动插件目录里的 `gamedata/`(游戏映射表 + 流派攻略文档,渲染与对标都依赖它)
+- 目录名保持 `astrbot_plugin_yanyun_query`:AstrBot 用目录名识别插件,改名会加载失败
+- 服务器 `git pull` 卡住(常见于国内直连 GitHub)时,可以本地打包再 scp 上去,或用插件市场的更新
 
 ## 凭据获取
 
