@@ -153,6 +153,12 @@ class YanyunQueryPlugin(Star):
             self.context.register_web_api(
                 f"/{PLUGIN_NAME}/login/cancel", self._api_login_cancel, ["POST"], "取消扫码登录"
             )
+            self.context.register_web_api(
+                f"/{PLUGIN_NAME}/account/list", self._api_account_list, ["GET"], "列出已登录的燕云账号"
+            )
+            self.context.register_web_api(
+                f"/{PLUGIN_NAME}/account/delete", self._api_account_delete, ["POST"], "删除已登录的燕云账号"
+            )
             logger.info("[燕云查询] 面板 API 已注册")
         except Exception as e:
             logger.warning(f"[燕云查询] 注册面板 API 失败(功能不可用): {e}")
@@ -216,6 +222,63 @@ class YanyunQueryPlugin(Star):
     async def _api_login_cancel(self) -> Any:
         result = await self.login_svc.cancel()
         return json_response({"status": self.login_svc.status(), **result})
+
+    def _account_list(self) -> list[dict]:
+        """已登录的燕云账号(来自 dashen_accounts)。"""
+        out = []
+        for acc in self.config.get("dashen_accounts") or []:
+            rid = str(acc.get("role_id") or "").strip()
+            if not rid:
+                continue
+            nick = str(acc.get("nick") or acc.get("name") or "").strip()
+            out.append({
+                "role_id": rid,
+                "nick": nick or f"角色{rid}",
+                "enabled": bool(acc.get("enabled", True)),
+                "has_token": bool(str(acc.get("token") or "").strip()),
+            })
+        return out
+
+    async def _api_account_list(self) -> Any:
+        return json_response({"accounts": self._account_list()})
+
+    async def _api_account_delete(self) -> Any:
+        body = await request.json(default={}) or {}
+        role_id = str(body.get("role_id") or "").strip()
+        if not role_id:
+            return json_response({"ok": False, "message": "缺少角色"})
+        accounts = list(self.config.get("dashen_accounts") or [])
+        label = role_id
+        keep = []
+        for acc in accounts:
+            if str(acc.get("role_id") or "").strip() == role_id:
+                label = str(acc.get("nick") or acc.get("name") or role_id).strip()
+                continue
+            keep.append(acc)
+        if len(keep) == len(accounts):
+            return json_response({"ok": False, "message": "没找到这个角色"})
+        self.config["dashen_accounts"] = keep
+        self.config.save_config()
+        # 该角色的凭据没了,顺手把指向它的用户绑定清掉
+        removed = []
+        try:
+            removed = await self.store.prune_identities(self.client._pool.role_ids() if keep else set())
+        except Exception as e:
+            logger.warning(f"[燕云查询] 清理绑定失败: {e}")
+        try:
+            await self.login_svc.cancel()
+        except Exception:
+            pass
+        self._build_client()
+        logger.info(f"[燕云查询] 面板删除账号:{label}({role_id}),解绑 {len(removed)} 个用户")
+        msg = f"已删除「{label}」"
+        if removed:
+            msg += f",同时解除了 {len(removed)} 个用户的绑定"
+        return json_response({
+            "ok": True,
+            "message": msg,
+            "accounts": self._account_list(),
+        })
 
     # ------------------------------------------------------------------ 自然语言(LLM 工具)
 

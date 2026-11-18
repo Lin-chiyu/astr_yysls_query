@@ -3,69 +3,143 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>燕云登录绑定</title>
+<title>燕云角色面板插件</title>
 <style>
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body { font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
-         margin: 0; padding: 16px; background: #f5f6f8; color: #333; }
-  .card { background: #fff; border-radius: 12px; padding: 20px; max-width: 640px;
-          box-shadow: 0 1px 4px rgba(0,0,0,.08); }
-  h2 { margin: 0 0 6px; font-size: 18px; }
-  .desc { color: #888; font-size: 13px; margin-bottom: 14px; line-height: 1.6; }
-  .row { display: flex; gap: 8px; flex-wrap: wrap; }
-  input { flex: 1; min-width: 220px; padding: 9px 12px; border: 1px solid #dcdfe6;
-          border-radius: 8px; font-size: 14px; outline: none; }
-  input:focus { border-color: #e34d4d; }
-  button { padding: 9px 18px; border: none; border-radius: 8px; font-size: 14px;
-           cursor: pointer; background: #e34d4d; color: #fff; }
-  button.secondary { background: #909399; }
+         margin: 0; background: #f7f8fa; color: #333; font-size: 14px; }
+
+  /* 顶部标题栏 */
+  .topbar { display: flex; align-items: center; justify-content: space-between;
+            gap: 16px; padding: 18px 28px; background: #fff;
+            border-bottom: 1px solid #ebeef5; }
+  .topbar h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: .3px; }
+  .topbar .sub { color: #a0a4ab; font-size: 12px; margin-top: 3px; }
+  .topbar .actions { display: flex; gap: 10px; flex: none; }
+
+  /* 账号卡片(一行多个) */
+  .page { padding: 16px 28px 40px; }
+  .list-head { display: flex; align-items: center; justify-content: space-between;
+               padding: 4px 2px 12px; color: #8a8f99; font-size: 12px; }
+  .grid { display: grid; gap: 10px;
+          grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .acc-card { background: #fff; border: 1px solid #ebeef5; border-radius: 10px;
+              padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;
+              transition: border-color .15s, box-shadow .15s; }
+  .acc-card:hover { border-color: #e4e7ed; box-shadow: 0 2px 8px rgba(0,0,0,.05); }
+  .acc-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .acc-nick { font-size: 13.5px; font-weight: 600; color: #2f3338;
+              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .acc-foot { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 20px; flex: none; }
+  .badge.ok { color: #529b2e; background: #f0f9eb; border: 1px solid #d6edc8; }
+  .badge.off { color: #909399; background: #f4f4f5; border: 1px solid #e7e7e7; }
+  .badge.warn { color: #b88230; background: #fdf6ec; border: 1px solid #f5dab1; }
+  .empty { padding: 40px 0; text-align: center; color: #b0b4bb; }
+
+  button { font-family: inherit; font-size: 14px; border-radius: 8px; cursor: pointer;
+           border: none; padding: 9px 18px; }
   button:disabled { opacity: .5; cursor: not-allowed; }
-  .state { margin: 14px 0 4px; padding: 10px 12px; background: #f4f4f5;
-           border-radius: 8px; font-size: 14px; white-space: pre-wrap; word-break: break-all; }
-  .qr-wrap { text-align: center; margin-top: 12px; }
-  .qr-wrap img { width: 280px; border: 1px solid #eee; border-radius: 8px; background: #fff; }
-  .tip { color: #999; font-size: 12px; margin-top: 8px; line-height: 1.6; }
-  .roles { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .btn-primary { background: #e34d4d; color: #fff; }
+  .btn-primary:hover { background: #d04343; }
+  .btn-plain { background: #fff; color: #606266; border: 1px solid #dcdfe6; }
+  .btn-plain:hover { border-color: #c0c4cc; }
+  .btn-danger { background: #fff; color: #f56c6c; border: 1px solid #fbc4c4;
+                padding: 6px 14px; font-size: 13px; }
+  .btn-danger:hover { background: #fef0f0; border-color: #f56c6c; }
+
+  /* 弹窗 */
+  .mask { position: fixed; inset: 0; background: rgba(0,0,0,.45);
+          display: flex; align-items: center; justify-content: center; padding: 24px; z-index: 50; }
+  .modal { width: 100%; max-width: 560px; max-height: 90vh; overflow: auto;
+           background: #fff; border-radius: 14px; box-shadow: 0 12px 40px rgba(0,0,0,.18); }
+  .modal-head { display: flex; align-items: center; justify-content: space-between;
+                padding: 18px 22px; border-bottom: 1px solid #f0f1f3; }
+  .modal-head h2 { margin: 0; font-size: 16px; font-weight: 600; }
+  .modal-close { background: transparent; color: #909399; font-size: 20px; line-height: 1;
+                 padding: 4px 8px; }
+  .modal-close:hover { color: #606266; }
+  .modal-body { padding: 18px 22px 22px; }
+  .desc { color: #909399; font-size: 13px; line-height: 1.7; margin-bottom: 14px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  input { flex: 1; min-width: 200px; padding: 9px 12px; border: 1px solid #dcdfe6;
+          border-radius: 8px; font-size: 14px; outline: none; font-family: inherit; }
+  input:focus { border-color: #e34d4d; }
+  .state { margin-top: 14px; padding: 10px 12px; background: #f4f4f5; border-radius: 8px;
+           font-size: 13px; color: #606266; white-space: pre-wrap; word-break: break-all; }
+  .qr-wrap { text-align: center; margin-top: 14px; }
+  .qr-wrap img { width: 260px; border: 1px solid #eee; border-radius: 8px; background: #fff; }
+  .tip { color: #a0a4ab; font-size: 12px; margin-top: 8px; line-height: 1.6; }
+  .roles { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
   .role-btn { display: flex; justify-content: space-between; align-items: center; gap: 12px;
               text-align: left; background: #fff5f5; color: #333; border: 1px solid #f0c9c9;
-              border-radius: 8px; padding: 10px 14px; font-size: 14px; }
+              border-radius: 8px; padding: 11px 14px; font-size: 14px; }
   .role-btn:hover { background: #ffecec; border-color: #e34d4d; }
-  .role-btn span { color: #888; font-size: 12px; }
-  .result { margin-top: 12px; padding: 12px; background: #f0f9eb; border-radius: 8px;
-            font-size: 13px; line-height: 1.8; word-break: break-all; }
+  .role-btn span { color: #999; font-size: 12px; }
+  .result { margin-top: 14px; padding: 12px 14px; background: #f0f9eb; border-radius: 8px;
+            font-size: 13px; line-height: 1.9; word-break: break-all; }
   .result .ok { color: #67c23a; font-weight: 600; }
-  .err { color: #f56c6c; font-size: 13px; margin-top: 10px; white-space: pre-wrap; }
-  .hidden { display: none; }
+  .err { color: #f56c6c; font-size: 13px; margin-top: 12px; white-space: pre-wrap; }
+  .hidden { display: none !important; }
 </style>
 </head>
 <body>
-  <div class="card">
-    <h2>燕云十六声 · 扫码登录</h2>
-    <div class="desc">
-      点击按钮后机器人会自动打开大神网页版并截取登录二维码,用<b>手机大神 App</b> 扫码登录,
-      登录成功后列出该账号下的燕云角色,点选要绑定的那个就行,插件会自己记好。<br>
-      角色留空即可(扫码后再选角色);也可以直接填角色名走老流程。
+  <div class="topbar">
+    <div>
+      <h1>燕云角色面板插件</h1>
+      <div class="sub">已登录的燕云账号都能被查询;删除后该账号查不了,绑在它上面的群友会被解绑</div>
     </div>
-    <div class="row">
-      <input id="role-id" placeholder="可选:角色名,如 林迟羽">
-      <button id="btn-start">开始扫码登录</button>
-      <button id="btn-cancel" class="secondary">取消</button>
+    <div class="actions">
+      <button id="btn-add" class="btn-primary">+ 新增</button>
     </div>
-    <div id="state" class="state">待机</div>
-    <div id="roles" class="roles hidden"></div>
-    <div id="qr-wrap" class="qr-wrap hidden">
-      <img id="qr" alt="登录二维码">
-      <div class="tip">请用手机「大神 App」→ 首页右上角扫一扫,扫码登录<br>
-      二维码约 2 分钟有效,过期请点「取消」后重新获取</div>
-    </div>
-    <div id="result" class="result hidden">
-      <div class="ok">✓ 登录成功</div>
-      <div>role_id: <span id="r-role"></span></div>
-      <div>登录码: <span id="r-token"></span></div>
-      <div>dts: <span id="r-dts"></span></div>
-      <div id="r-saved"></div>
-    </div>
-    <div id="err" class="err"></div>
   </div>
+
+  <div class="page">
+    <div class="list-head">
+      <span>已登录账号</span>
+      <span id="acc-count"></span>
+    </div>
+    <div id="rows" class="grid"></div>
+    <div id="empty" class="empty">还没有登录任何账号,点右上角「+ 新增」开始。</div>
+  </div>
+
+  <!-- 新增账号弹窗 -->
+  <div id="mask" class="mask hidden">
+    <div class="modal">
+      <div class="modal-head">
+        <h2>新增燕云账号</h2>
+        <button id="btn-close" class="modal-close" title="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="desc">
+          点下面的按钮,机器人会用无头浏览器打开大神网页版并截取登录二维码;
+          用<b>手机大神 App</b> 扫码登录后,会列出该账号下的燕云角色,点选要用的那个就行。<br>
+          角色名可以留空(扫码后再选),也可以直接填好省一步。
+        </div>
+        <div class="row">
+          <input id="role-id" placeholder="可选:角色名,如 林迟羽">
+          <button id="btn-start" class="btn-primary">开始扫码登录</button>
+          <button id="btn-cancel" class="btn-plain">取消</button>
+        </div>
+        <div id="state" class="state">待机</div>
+        <div id="roles" class="roles hidden"></div>
+        <div id="qr-wrap" class="qr-wrap hidden">
+          <img id="qr" alt="登录二维码">
+          <div class="tip">手机「大神 App」→ 首页右上角扫一扫<br>二维码约 2 分钟有效,过期点「取消」重新获取</div>
+        </div>
+        <div id="result" class="result hidden">
+          <div class="ok">✓ 登录成功</div>
+          <div>角色: <span id="r-role"></span></div>
+          <div>登录码: <span id="r-token"></span></div>
+          <div>dts: <span id="r-dts"></span></div>
+          <div id="r-saved"></div>
+        </div>
+        <div id="err" class="err"></div>
+      </div>
+    </div>
+  </div>
+
   <script type="module" src="./app.js"></script>
 </body>
 </html>
