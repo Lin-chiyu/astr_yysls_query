@@ -286,8 +286,12 @@ def _collect_attrs(data: dict) -> dict:
                     disp = f"+{v}"
                 item_affixes.append((name, disp, rarity, progress, recommended))
             if item_affixes:
+                base_attrs = ex.get("base_attrs")
                 per_equip.append(
-                    {"slot": slot_label, "slot_no": str(slot_no), "name": eq_name, "level": equip_level, "suit": suit, "affixes": item_affixes}
+                    {"slot": slot_label, "slot_no": str(slot_no), "name": eq_name, "level": equip_level,
+                     "suit": suit, "affixes": item_affixes,
+                     "rarity": eq_info.get("rarity") if isinstance(eq_info, dict) else None,
+                     "base_attrs": dict(base_attrs) if isinstance(base_attrs, dict) else {}}
                 )
 
     total_entries: list[tuple[str, str, int, float]] = []

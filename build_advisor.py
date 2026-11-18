@@ -96,6 +96,70 @@ def _tone_by_slot(proxy: dict) -> dict[str, str]:
     return out
 
 
+RARITY_NAME = {1: "白装", 2: "绿装", 3: "蓝装", 4: "紫装", 5: "金装"}
+GOLD_AFFIX_RARITY = 3      # 词条品阶:3=金、2=紫、1=蓝
+AFFIX_RARITY_NAME = {0: "灰", 1: "蓝", 2: "紫", 3: "金", 4: "金"}
+FULL_AFFIX_COUNT = 6       # 满配词条条数
+
+
+def _suit_ok(report: dict) -> bool:
+    """套装是否凑齐流派推荐(推荐里的每套都要 >=4 件)。"""
+    names = re.findall(r"[一-龥]{2,4}(?=四件套)", report.get("suit_rec") or "")
+    if not names:
+        return True
+    return all((report.get("suits") or {}).get(n, 0) >= 4 for n in names)
+
+
+def _equip_audit(view: dict, suit_rec: str = "") -> dict:
+    """装备体检:只挑有问题的装备(等级 / 首词条 / 流派套装)。
+
+    返回 {"rows": [{"slot","name","level","notes"}], "extra": [str], "affix_total": dict|None}。
+    rows 只包含有问题的装备;affix_total 只在总词条不满时给出。
+    """
+    equips = view.get("per_equip") or []
+    top_level = max((e.get("level") or 0) for e in equips) if equips else 0
+    rec_suits = re.findall(r"[一-龥]{2,4}(?=四件套)", suit_rec or "")
+    rows: list[dict] = []
+    extra: list[str] = []
+    for eq in equips:
+        notes: list[str] = []
+        lv = eq.get("level")
+        if lv and top_level and lv < top_level:
+            notes.append(f"更换成{top_level}装备")
+        affs = eq.get("affixes") or []
+        if affs:
+            try:
+                first_rarity = int(affs[0][2] or 0)
+            except (TypeError, ValueError):
+                first_rarity = 0
+            if first_rarity < GOLD_AFFIX_RARITY:
+                notes.append(f"首词条为{AFFIX_RARITY_NAME.get(first_rarity, '低')} 建议更换装备")
+        suit = (eq.get("suit") or "").strip()
+        if rec_suits and suit and not any(s in suit or suit in s for s in rec_suits):
+            notes.append(f"与推荐流派不符,优先更换成{rec_suits[0]}套")
+        if notes:
+            rows.append({"slot": eq.get("slot") or "装备", "name": eq.get("name") or "",
+                         "level": lv, "notes": notes})
+
+    # 套装件数不够(但每件都没穿错套)时,表格下面补一句
+    for s in rec_suits:
+        n = sum(1 for e in equips if s and s in (e.get("suit") or ""))
+        if n and n < 4:
+            extra.append(f"{s}套只有 {n} 件,凑不齐四件套")
+
+    total_have = sum(len(e.get("affixes") or []) for e in equips)
+    total_ref = len(equips) * FULL_AFFIX_COUNT
+    affix_total = None
+    if equips and total_have < total_ref:
+        missing = list(dict.fromkeys(
+            e.get("slot") or "装备" for e in equips
+            if len(e.get("affixes") or []) < FULL_AFFIX_COUNT))
+        affix_total = {"have": total_have, "ref": total_ref,
+                       "note": f"{'/'.join(missing)}词条未满(优先调律)"}
+    return {"rows": rows, "extra": extra, "affix_total": affix_total}
+
+
+
 def build_advisor(proxy: dict, info: dict | None = None) -> dict:
     """构造养成分析报告(结构化,供文本块与图片卡共用)。"""
     main_id = _get(proxy, "combat_plan.kongfu.kongfu_main")
@@ -115,18 +179,25 @@ def build_advisor(proxy: dict, info: dict | None = None) -> dict:
         "nickname": view["nickname"], "level": view["level"],
         "kongfu_main": f"{_map_name('kongfu', main_id)}{_get(proxy, 'combat_plan.kongfu_level.kongfu_main.level')}级",
         "kongfu_sub": f"{_map_name('kongfu', sub_id)}{_get(proxy, 'combat_plan.kongfu_level.kongfu_sub.level')}级",
-        "suits": {}, "suit_rec": "", "affix_rows": [], "panel_rows": [], "bad_first": [],
+"suits": {}, "suit_rec": "", "affix_rows": [], "panel_rows": [], "bad_first": [],
+        "equip_rows": [], "equip_extra": [], "affix_total_row": None,
     }
     for eq in view["per_equip"]:
         if eq.get("suit"):
             report["suits"][eq["suit"]] = report["suits"].get(eq["suit"], 0) + 1
 
-    if liupai == "未知流派":
-        return report
-    doc = load_doc(liupai)
+    doc = "" if liupai == "未知流派" else load_doc(liupai)
     m = re.search(r"\*\*推荐方案\*\*[:：]\s*(.+)", doc)
     if m:
-        report["suit_rec"] = m.group(1).strip()
+        # 去掉文档里的套装简称注释,例如「倾觞四件套 & 盈盏四件套(套装:「觞」「盈」)」
+        report["suit_rec"] = re.sub(r"[（(]套装[:：][^)）]*[)）]", "", m.group(1)).strip()
+    report["suit_ok"] = _suit_ok(report)
+    audit = _equip_audit(view, report["suit_rec"])
+    report["equip_rows"] = audit["rows"]
+    report["equip_extra"] = audit["extra"]
+    report["affix_total_row"] = audit["affix_total"]
+    if liupai == "未知流派":
+        return report
     wuxei_type = "会意" if "会意流派" in doc else "会心"  # 会意流=鸣金系(文档明示),其余按会心
 
     # 部位首词条(不在报告单独展示,仅用于养成方向提示)
@@ -226,6 +297,24 @@ def build_advisor(proxy: dict, info: dict | None = None) -> dict:
         if slots:
             status += f"({'/'.join(slots)})"
         rows.append({"name": n, "have": c, "ref": "—", "status": status, "kind": "extra", "slots": slots})
+    non_gold_by_name: dict[str, tuple[int, list[str]]] = {}
+    for _eq in view["per_equip"]:
+        _slot = _eq.get("slot") or "装备"
+        for _a in _eq["affixes"]:
+            try:
+                if int(_a[2] or 0) < GOLD_AFFIX_RARITY:
+                    _n, _slots = non_gold_by_name.get(_a[0], (0, []))
+                    if _slot not in _slots:
+                        _slots.append(_slot)
+                    non_gold_by_name[_a[0]] = (_n + 1, _slots)
+            except (TypeError, ValueError):
+                pass
+    for _r in rows:
+        _r.setdefault("slots", slots_by.get(_r["name"], []))
+        if not _r["name"].startswith("定音·"):
+            _n, _slots = non_gold_by_name.get(_r["name"], (0, []))
+            _r["non_gold"] = _n
+            _r["non_gold_slots"] = _slots
     report["affix_rows"] = rows
 
     # ---- 战力模块 ----
@@ -257,6 +346,77 @@ def build_advisor(proxy: dict, info: dict | None = None) -> dict:
             report["panel_rows"].append({"mod": mod, "panel": f"{cur:g}{unit}", "ref": ref, "status": mark, "note": note})
         # 其余模块(如特殊增伤)接口无对应字段,不生成行
     return report
+
+
+def make_summary(report: dict) -> list[str]:
+    """把对标结果写成 2~4 段自然语言(卡片底部的「总结」)。
+
+    只陈述数据结论,不编造;每段一个主题,方便直接读。
+    """
+    if report.get("liupai") == "未知流派":
+        return ["暂时没认出这个流派,先把功法和套装截图发我看看。"]
+
+    paras: list[str] = []
+
+    # ① 装备
+    bad = report.get("equip_rows") or []
+    extra = report.get("equip_extra") or []
+    if bad:
+        names = [f"{r['slot']}·{r['name']}" for r in bad[:3]]
+        tail = f"等 {len(bad)} 件" if len(bad) > 3 else ""
+        notes = {n for r in bad for n in r["notes"]}
+        what = []
+        if any("级" in n and "更换成" in n for n in notes):
+            what.append("等级没跟上")
+        if any(n.startswith("首词条为") for n in notes):
+            what.append("首词条不是金")
+        if any("流派" in n for n in notes):
+            what.append("套装配错流派")
+        detail = f"({','.join(what)})" if what else ""
+        paras.append(f"装备这边{detail}:{'、'.join(names)}{tail}需要换。"
+                     + (f"{'；'.join(extra)}。" if extra else ""))
+    elif not extra:
+        paras.append("装备本身没问题,金装、满词条、等级也齐,不用动。")
+
+    # ② 词条缺口
+    gaps = [r for r in report["affix_rows"]
+            if isinstance(r.get("ref"), int) and r["ref"] - r["have"] > 0]
+    gaps.sort(key=lambda r: -(r["ref"] - r["have"]))
+    if gaps:
+        seg = "、".join(f"{_short(r['name'])}({r['have']}/{r['ref']})" for r in gaps[:3])
+        slots: list[str] = []
+        for r in gaps[:6]:
+            for s in r.get("slots") or []:
+                if s not in slots:
+                    slots.append(s)
+        where = f",优先动{'/'.join(slots[:4])}" if slots else ""
+        paras.append(f"词条最缺的是 {seg},整体还差 {sum(r['ref'] - r['have'] for r in gaps)} 条{where}。")
+
+    # ③ 溢出/达标项
+    keep = [r for r in report["panel_rows"] if r["mod"].endswith("率") and str(r["status"]).startswith("+")]
+    if keep:
+        paras.append("、".join(f"{r['mod']}{r['panel']}(比参考高 {r['status'].lstrip('+')})" for r in keep)
+                     + " 已经够了,这几个词条可以拿去换别的。")
+
+    # ④ 非金词条 / 洗练
+    non_gold = [r for r in report["affix_rows"] if r.get("non_gold")]
+    if non_gold:
+        parts = [f"{_short(r['name'])}有 {r['non_gold']} 条不是金(在{'/'.join(r.get('non_gold_slots') or [])})"
+                 for r in non_gold[:3]]
+        paras.append("；".join(parts) + ",先洗成金的,面板才吃得满。")
+
+    # ⑤ 收尾
+    if not bad and not gaps:
+        paras.append("面板和词条都在参考线上,后面就是慢慢把词条洗满、等更好的装备。")
+    return paras
+
+
+def _short(name: str) -> str:
+    """把长词条名压短,方便塞进句子。"""
+    return (name.replace("最小外功攻击", "小外攻击")
+                .replace("最大外功攻击", "大外攻击")
+                .replace("最小破竹攻击", "小破竹")
+                .replace("最大破竹攻击", "大破竹"))
 
 
 def make_directions(report: dict) -> list[str]:
@@ -338,14 +498,29 @@ def make_ai_prompt(report: dict) -> str:
     rows = "\n".join(
         f"{r['name']}" + (f"(在{'/'.join(r['slots'])})" if r.get("slots") else "")
         + f" 面板{r['have']}/参考{r['ref']}:{r['status']}"
+        + (f"(该词条非金{r['non_gold']}条,在{'/'.join(r.get('non_gold_slots') or [])})"
+           if r.get("non_gold") else "")
         for r in report["affix_rows"])
+    tot = report.get("affix_total_row")
+    if tot:
+        rows = f"总词条 {tot['have']}/{tot['ref']}:{tot['note']}\n" + rows
     panels = "\n".join(f"{r['mod']} 面板{r['panel']}/参考{r['ref']}:{r['status']}({r['note']})"
                        for r in report["panel_rows"])
     suits = "+".join(f"{k}{v}件" for k, v in report["suits"].items())
+    bad_equips = report.get("equip_rows") or []
+    if bad_equips:
+        equips = "\n".join(f"{r['slot']}·{r['name']} {r['level']}级 " + "；".join(r["notes"])
+                           for r in bad_equips)
+    else:
+        equips = "无问题(等级/首词条/流派都合格)"
+    if report.get("equip_extra"):
+        equips += "\n" + "\n".join(report["equip_extra"])
     return (
         "你是燕云十六声养成顾问。请根据以下对标数据,自行分析并写一段简短的中文养成推荐,"
         "不要编造数据:\n"
-        f"流派:{report['liupai']}(套装:{suits})\n"
+        f"流派:{report['liupai']}(当前套装:{suits};流派推荐配装:{report.get('suit_rec') or '无'})\n"
+        "如果套装和流派推荐不搭,可以在建议里直接说该凑哪套,或者建议换成哪个更合适的流派。\n"
+        f"装备体检:\n{equips}\n"
         f"词条对标:\n{rows}\n战力模块:\n{panels}"
     )
 
@@ -361,20 +536,38 @@ def render_text(report: dict) -> list[str]:
         head.append(f"套装: {suits}" + ("(与推荐一致)" if ok else f"(推荐: {report['suit_rec']})"))
     blocks.append(head)
 
+    import unicodedata
+
+    def dw(x):
+        return sum(2 if unicodedata.east_asian_width(ch) in "FW" else 1 for ch in str(x))
+
+    def pad(s, width, right=False):
+        s = str(s)
+        gap = width - dw(s)
+        return (s if gap <= 0 else s + " " * gap) if not right else ((" " * gap + s) if gap > 0 else s)
+    bad_equips = report.get("equip_rows") or []
+    equip_extra = report.get("equip_extra") or []
+    if bad_equips or equip_extra:
+        title = f"―― 装备体检 · {len(bad_equips)} 件要注意 ――" if bad_equips else "―― 装备体检 ――"
+        b = [title, f"{pad('装备', 22)}{pad('等级', 8, True)}  备注"]
+        for r in bad_equips:
+            label = f"{r['slot']}·{r['name']}"
+            b.append(f"{pad(label, 22)}{pad(r['level'] or '—', 8, True)}  {'；'.join(r['notes'])}")
+        for s in equip_extra:
+            b.append(f"· {s}")
+        blocks.append(b)
+
     if report["affix_rows"]:
-        import unicodedata
-
-        def dw(x):
-            return sum(2 if unicodedata.east_asian_width(ch) in "FW" else 1 for ch in str(x))
-
-        def pad(s, width, right=False):
-            s = str(s)
-            gap = width - dw(s)
-            return (s if gap <= 0 else s + " " * gap) if not right else ((" " * gap + s) if gap > 0 else s)
-
-        b = ["―― 词条数量对标 ――", f"{pad('词条', 28)}{pad('面板', 4, True)}{pad('参考', 6, True)}  备注"]
+        b = ["―― 词条对标 ――", f"{pad('词条', 28)}{pad('面板', 4, True)}{pad('参考', 6, True)}  备注"]
+        tot = report.get("affix_total_row")
+        if tot:
+            b.append(pad("总词条", 28) + pad(tot["have"], 4, True) + pad(str(tot["ref"]), 6, True)
+                     + "  " + tot["note"])
         for r in report["affix_rows"]:
-            b.append(pad(r["name"], 28) + pad(r["have"], 4, True) + pad(str(r["ref"]), 6, True) + "  " + r["status"])
+            note = r["status"]
+            if r.get("non_gold"):
+                note += f"(非金{r['non_gold']}条:{'/'.join(r.get('non_gold_slots') or [])})"
+            b.append(pad(r["name"], 28) + pad(r["have"], 4, True) + pad(str(r["ref"]), 6, True) + "  " + note)
         blocks.append(b)
 
     if report["panel_rows"]:
@@ -384,8 +577,8 @@ def render_text(report: dict) -> list[str]:
             b.append(pad(f"{mark}{r['mod']}", 10) + pad(r["panel"], 12, True) + pad(r["ref"], 12, True) + f"  {r['status']}·{r['note']}")
         blocks.append(b)
 
-    dirs = make_directions(report)
-    if dirs:
-        blocks.append(["―― 养成方向 ――"] + [f"{i}. {d}" for i, d in enumerate(dirs, 1)])
+    summary = make_summary(report)
+    if summary:
+        blocks.append(["―― 养成方向 ――"] + list(summary))
     blocks.append(["―― 小结 ――", rule_summary(report)])
     return ["\n".join(b) for b in blocks if b]

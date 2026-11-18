@@ -406,6 +406,17 @@ _ADVISOR_CSS = """
   ol.dirs { margin: 4px 0 0 0; padding-left: 20px; }
   ol.dirs li { font-size: 13.5px; line-height: 1.9; color: #d5d0c2; }
   ol.dirs li::marker { color: #d8b26a; }
+  ul.issues { margin: 6px 0 0 0; padding-left: 18px; }
+  ul.issues-in-sec { margin-top: 4px; }
+  ul.issues li { font-size: 13px; line-height: 1.8; color: #e08585; }
+  ul.issues li::marker { color: #e08585; }
+  ul.issues li.ok { color: #8a93a3; }
+  .equip-ok { font-size: 13px; color: #8a93a3; margin-top: 6px; line-height: 1.8; }
+  .equip-tbl { grid-template-columns: max-content 70px minmax(0, 1fr); }
+  .sum { margin: 6px 0 0 0; line-height: 1.95; color: #d5d0c2; font-size: 13.5px; }
+  .sum + .sum { margin-top: 8px; }
+  .equip-tbl .c-rem { font-size: 13px; color: #e8b4b4; line-height: 1.6; }
+  .issues-under { margin: 6px 0 0 0; }
 """
 
 
@@ -427,7 +438,7 @@ def _arow(cells: list[str], head: bool = False) -> str:
            f'<span class="c3">{cells[2]}</span><span class="c4">{cells[3]}</span></div>'
 
 
-def build_advisor_html(report: dict, dirs: list[str]) -> str:
+def build_advisor_html(report: dict, summary: list[str]) -> str:
     """把 build_advisor 的报告渲染成完整 HTML(养成分析卡,不含 AI 段落——AI 由机器人侧生成)。"""
     import html as _html
     from datetime import datetime
@@ -459,12 +470,37 @@ def build_advisor_html(report: dict, dirs: list[str]) -> str:
         col1 = max((dw(n) for n in names), default=10) * 7.2 + 6
         grid_cols = f"{col1:.0f}px 76px 76px max-content"
 
+    bad_equips = report.get("equip_rows") or []
+    equip_extra = report.get("equip_extra") or []
+    if bad_equips or equip_extra:
+        title = f"装备体检 · {len(bad_equips)} 件要注意" if bad_equips else "装备体检"
+        erows = ['<div class="arow hrow"><span class="c1">装备</span>'
+                 '<span class="c2">等级</span><span class="c-rem">备注</span></div>']
+        for r in bad_equips:
+            label = f"{r['slot']}·{r['name']}"
+            erows.append(f'<div class="arow"><span class="c1">{esc(label)}</span>'
+                         f'<span class="c2">{esc(r["level"] or "—")}</span>'
+                         f'<span class="c-rem">{esc("；".join(r["notes"]))}</span></div>')
+        h.append(f'<div class="sec"><div class="sec-title">{title}</div>'
+                 f'<div class="table equip-tbl">{ "".join(erows) }</div></div>')
+        if equip_extra:
+            lis = "".join(f"<li>{esc(x)}</li>" for x in equip_extra)
+            h.append(f'<ul class="issues issues-under">{lis}</ul>')
     if report["affix_rows"]:
         rows = [_arow(["词条", "面板", "参考", "备注"], head=True)]
+        tot = report.get("affix_total_row")
+        if tot:
+            rows.append(f'<div class="arow"><span class="c1">总词条</span>'
+                        f'<span class="c2">{esc(tot["have"])}</span>'
+                        f'<span class="c3">{esc(tot["ref"])}</span>'
+                        f'<span class="c4"><span class="st-miss">{esc(tot["note"])}</span></span></div>')
         for r in report["affix_rows"]:
             note = f'<span class="{_st_class(r["status"])}">{esc(r["status"])}</span>'
+            if r.get("non_gold"):
+                _sl = "/".join(r.get("non_gold_slots") or [])
+                note += f' <span class="st-miss">(非金{r["non_gold"]}条:{_sl})</span>'
             rows.append(_arow([esc(r["name"]), esc(r["have"]), esc(r["ref"]), note]))
-        h.append(f'<div class="sec"><div class="sec-title">词条数量对标</div>'
+        h.append(f'<div class="sec"><div class="sec-title">词条对标</div>'
                  f'<div class="table" style="grid-template-columns:{grid_cols};">{"".join(rows)}</div></div>')
 
     if report["panel_rows"]:
@@ -476,9 +512,9 @@ def build_advisor_html(report: dict, dirs: list[str]) -> str:
         h.append(f'<div class="sec"><div class="sec-title">战力模块对标</div>'
                  f'<div class="table" style="grid-template-columns:{grid_cols};">{"".join(rows)}</div></div>')
 
-    if dirs:
-        lis = "".join(f"<li>{esc(d)}</li>" for d in dirs)
-        h.append(f'<div class="sec"><div class="sec-title">养成方向</div><ol class="dirs">{lis}</ol></div>')
+    if summary:
+        ps = "".join(f'<p class="sum">{esc(s)}</p>' for s in summary)
+        h.append(f'<div class="sec"><div class="sec-title">养成方向</div>{ps}</div>')
 
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     h.append(f'<div class="foot">数据来源:网易大神 · 流派推荐文档 · 生成于 {stamp}</div>')
@@ -492,13 +528,13 @@ async def render_advisor_image(report: dict, mirror: str = "", auto_install: boo
         logger.warning("[燕云图片] playwright 未安装,养成分析回退文本输出")
         return None
     try:
-        from .build_advisor import make_directions
+        from .build_advisor import make_summary
     except ImportError:
-        from build_advisor import make_directions  # type: ignore[no-redef]
+        from build_advisor import make_summary  # type: ignore[no-redef]
 
     if not report.get("affix_rows") and not report.get("panel_rows"):
         return None
-    page_html = build_advisor_html(report, make_directions(report))
+    page_html = build_advisor_html(report, make_summary(report))
 
     launch_kwargs: dict = {}
     pw = None
